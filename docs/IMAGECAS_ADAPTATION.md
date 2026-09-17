@@ -116,6 +116,11 @@ and cross-split leakage checks. Fully resolved case paths and source split
 provenance are stored with each run and checkpoint. LCA and RCA use separate
 configs, caches, output directories, and model runs.
 
+Schema-v2 manifests may contain legacy path lists at the root and richer records
+under `splits`. This mirrored form is accepted only when the ordered canonical
+IDs agree for all three partitions; the richer nested records are then used for
+provenance. Conflicting containers remain an error.
+
 ## Stage-2 camera convention
 
 Camera calculations use right-handed XYZ coordinates in metres. They reproduce

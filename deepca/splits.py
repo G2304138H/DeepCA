@@ -393,6 +393,75 @@ def _select_aliases(container: Mapping[str, Any], location: str) -> dict[str, st
     return selected
 
 
+def _canonical_split_signature(
+    container: Mapping[str, Any],
+    path: tuple[str, ...],
+    expected_vessel: str,
+) -> tuple[tuple[str, ...], ...]:
+    """Return ordered canonical IDs for comparing redundant split containers."""
+
+    location = _format_location(path)
+    aliases = _select_aliases(container, location)
+    signature: list[tuple[str, ...]] = []
+    for split in CANONICAL_SPLITS:
+        source_alias = aliases[split]
+        entries = container[source_alias]
+        if not isinstance(entries, list):
+            raise SplitError(
+                f"{location}.{source_alias} must be a JSON list, got "
+                f"{type(entries).__name__}."
+            )
+        canonical_ids: list[str] = []
+        for index, entry in enumerate(entries):
+            entry_location = f"{location}.{source_alias}[{index}]"
+            try:
+                case, _ = _resolve_entry(entry, expected_vessel)
+            except SplitError as error:
+                raise SplitError(f"{entry_location}: {error}") from error
+            canonical_ids.append(case.canonical_id)
+        signature.append(tuple(canonical_ids))
+    return tuple(signature)
+
+
+def _select_candidate_container(
+    candidates: list[tuple[tuple[str, ...], Mapping[str, Any]]],
+    expected_vessel: str,
+    source: Path,
+) -> tuple[tuple[str, ...], Mapping[str, Any]]:
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Schema-v2 split manifests mirror legacy path lists at the root and place
+    # richer records under $.splits. Accept that exact pair only when every
+    # ordered canonical case ID agrees; otherwise retain strict ambiguity.
+    if len(candidates) == 2:
+        by_path = {path: container for path, container in candidates}
+        nested_paths = [
+            path
+            for path in by_path
+            if len(path) == 1 and path[0].casefold() == "splits"
+        ]
+        if () in by_path and len(nested_paths) == 1:
+            nested_path = nested_paths[0]
+            try:
+                root_signature = _canonical_split_signature(
+                    by_path[()], (), expected_vessel
+                )
+                nested_signature = _canonical_split_signature(
+                    by_path[nested_path], nested_path, expected_vessel
+                )
+            except SplitError:
+                pass
+            else:
+                if root_signature == nested_signature:
+                    return nested_path, by_path[nested_path]
+
+    locations = ", ".join(_format_location(item[0]) for item in candidates)
+    raise SplitError(
+        f"Multiple candidate split containers found in {source}: {locations}."
+    )
+
+
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -440,13 +509,9 @@ def load_resolved_splits(
             f"No train/validation/test split container found in {source}; only "
             f"top-level or nested {sorted(CONTAINER_KEYS)} containers are supported."
         )
-    if len(candidates) > 1:
-        locations = ", ".join(_format_location(item[0]) for item in candidates)
-        raise SplitError(
-            f"Multiple candidate split containers found in {source}: {locations}."
-        )
-
-    container_path, container = candidates[0]
+    container_path, container = _select_candidate_container(
+        candidates, vessel, source
+    )
     container_location = _format_location(container_path)
     aliases = _select_aliases(container, container_location)
 
