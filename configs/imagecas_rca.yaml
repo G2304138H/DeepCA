@@ -1,0 +1,16 @@
+extends: imagecas_common.yaml
+
+experiment:
+  name: deepca_imagecas_rca
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca
+
+data:
+  vessel_type: rca
+  projection_root: /dataset/reny0012/imagecas_autocar_6/stage_2_imagecas_all_branch
+  ground_truth_root: /dataset/reny0012/imagecas_voxel
+  split_json: /export/home2/reny0012/result/vessel_trees/experiments_for_paper/exp6_rca_bspline_parallel_no_cross_vggt_refiner/split.json
+  calibration:
+    expected_detector_pixel_spacing_mm: 0.55
+    fallback_detector_pixel_spacing_mm: 0.55
+  cache:
+    directory: /export/home2/reny0012/result/deepca_imagecas/cache/rca

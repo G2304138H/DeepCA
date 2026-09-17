@@ -1,0 +1,10 @@
+extends: imagecas_rca.yaml
+
+evaluation:
+  device: cuda:0
+  checkpoint: /export/home2/reny0012/result/deepca_imagecas/rca/checkpoints/best.pt
+  split: test
+  threshold: 0.5
+  view_counts: [2]
+  save_predictions: true
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca/evaluation

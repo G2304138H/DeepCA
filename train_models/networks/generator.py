@@ -51,8 +51,19 @@ class Up(nn.Module):
         return x
 
 class Generator(nn.Module):
-    def __init__(self, in_channels=1, num_filters=64, class_num=1, batch_norm=True, sample=False):
+    def __init__(self, in_channels=1, num_filters=64, class_num=1, batch_norm=True,
+                 sample=False, volume_size=128):
         super(Generator, self).__init__()
+
+        if not isinstance(volume_size, int) or isinstance(volume_size, bool):
+            raise TypeError("volume_size must be an integer.")
+        if volume_size < 32 or volume_size % 16 != 0:
+            raise ValueError(
+                "volume_size must be at least 32 and divisible by 16; "
+                f"got {volume_size}."
+            )
+        self.volume_size = volume_size
+        latent_size = volume_size // 16
 
         self.down1 = Down(in_channels, num_filters, batch_norm)
         self.down2 = Down(num_filters, num_filters * 2, batch_norm)
@@ -60,7 +71,9 @@ class Generator(nn.Module):
         self.down4 = Down(num_filters * 4, num_filters * 8, batch_norm)
 
         self.bridge = ConvBlock(num_filters * 8, num_filters * 8, batch_norm)
-        self.viTrans = CCT(vol_size=8,n_input_channels=num_filters * 8,embedding_dim=num_filters * 8) 
+        self.viTrans = CCT(vol_size=latent_size,
+                           n_input_channels=num_filters * 8,
+                           embedding_dim=num_filters * 8)
         self.combine = ConvBlock(num_filters * 16, num_filters * 16, batch_norm)
 
         self.up1 = Up(num_filters * 16, num_filters * 8, batch_norm, sample)
@@ -71,6 +84,12 @@ class Generator(nn.Module):
         self.conv_class = nn.Conv3d(num_filters * 1, class_num, 1, stride=1, padding='same')
 
     def forward(self, x):
+        expected_shape = (self.volume_size, self.volume_size, self.volume_size)
+        if x.ndim != 5 or tuple(x.shape[2:]) != expected_shape:
+            raise ValueError(
+                "Generator expects a 5D NCDHW tensor with cubic spatial shape "
+                f"{expected_shape}, got {tuple(x.shape)}."
+            )
         conv1, x = self.down1(x)
         conv2, x = self.down2(x)
         conv3, x = self.down3(x)

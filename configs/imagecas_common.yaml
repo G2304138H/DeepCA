@@ -1,0 +1,88 @@
+experiment:
+  name: deepca_imagecas
+  output_dir: outputs/deepca_imagecas
+  seed: 1
+
+data:
+  vessel_type: rca
+  projection_root: /path/to/projections
+  ground_truth_root: /dataset/reny0012/imagecas_voxel
+  split_json: /path/to/split.json
+  calibration:
+    source_to_isocentre_m: 0.75
+    fallback_sid_m: 0.9
+    expected_detector_pixel_spacing_mm: null
+    fallback_detector_pixel_spacing_mm: null
+    detector_spacing_tolerance_mm: 0.0001
+    projection_center_offset_units: m
+  ground_truth:
+    volume_key: vol
+    spacing_key: spacing
+    source_axis_order: XYZ
+    max_voxels: 200000000
+    require_nonempty_target: true
+  views:
+    count: 2
+    train_selection: first
+    eval_selection: first
+    indices: null
+  preprocessing:
+    volume_size: 128
+    fov_mode: detector
+    fov_mm: null
+    projection_threshold: 0.0
+    backprojection_interpolation: nearest
+    combine: sum
+    chunk_depth: 8
+  cache:
+    enabled: true
+    directory: outputs/deepca_imagecas/cache
+
+model:
+  volume_size: 128
+  generator:
+    in_channels: 1
+    output_channels: 1
+    base_filters: 64
+    batch_norm: true
+    sample: false
+  critic:
+    channels: 2
+    dim: 128
+
+training:
+  device: cuda:0
+  deterministic: true
+  epochs: 200
+  batch_size: 3
+  workers: 2
+  mixed_precision: true
+  drop_last: true
+  validation_interval: 1
+  early_stopping_patience: 20
+  critic_steps_per_generator: 2
+  l1_weight: 100.0
+  gradient_penalty_weight: 10.0
+  gradient_clip_norm: null
+  generator_optimizer:
+    name: adam
+    learning_rate: 0.0001
+    betas: [0.5, 0.9]
+    weight_decay: 0.0
+  critic_optimizer:
+    name: adam
+    learning_rate: 0.0001
+    betas: [0.5, 0.9]
+    weight_decay: 0.0
+  scheduler:
+    name: none
+  resume: null
+
+evaluation:
+  device: cuda:0
+  checkpoint: null
+  split: test
+  threshold: 0.5
+  view_counts: [2]
+  save_predictions: true
+  output_dir: outputs/deepca_imagecas/evaluation

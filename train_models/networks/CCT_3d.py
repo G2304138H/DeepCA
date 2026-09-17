@@ -225,7 +225,7 @@ class TransformerLatent(Module):
             for i in range(num_layers)])
         self.norm = LayerNorm(embedding_dim)
 
-        self.final_linear = Linear(640, vol_size*vol_size*vol_size)
+        self.final_linear = Linear(sequence_length, vol_size*vol_size*vol_size)
         # self.fc = Linear(embedding_dim, num_classes)
         self.apply(self.init_weight)
 

@@ -53,6 +53,26 @@ tigre
 
 # 4. Code Instructions
 
+## ImageCAS NPZ adaptation
+
+This repository now includes a reproducible training and evaluation workflow
+for pre-generated ImageCAS `.npz` projections and binary ground-truth volumes.
+It preserves the released DeepCA generator and critic, adds deterministic split
+handling and calibrated cone-beam support backprojection, and writes resumable
+checkpoints plus Dice/clDice evaluation artifacts.
+
+See [the ImageCAS adaptation guide](docs/IMAGECAS_ADAPTATION.md) for the exact
+input schema, geometry conventions, Linux/CUDA environment setup, configuration
+fields, commands, validation checks, and documented deviations from the paper
+and released preprocessing code.
+
+```bash
+python train.py --config configs/imagecas_rca.yaml
+python train.py --config configs/imagecas_lca.yaml
+python evaluate.py --config configs/eval_imagecas_rca.yaml --split test
+python evaluate.py --config configs/eval_imagecas_lca.yaml --split test
+```
+
 ## Training Data Preparation
 
 Our training data are based on the segmented CCTA data (label) from [ImageCAS](https://github.com/XiaoweiXu/ImageCAS-A-Large-Scale-Dataset-and-Benchmark-for-Coronary-Artery-Segmentation-based-on-CT).
