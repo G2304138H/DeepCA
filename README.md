@@ -39,17 +39,30 @@ Our DeepCA model architecture is based on the Wasserstein conditional generative
   <img src="https://github.com/WangStephen/DeepCA/blob/main/img/model.png">
 </p>
 
-# 3. Packages Requirement
+# 3. Package Requirements
 
-This work requires following dependency packages:
+The authors' released environment was:
 
 ```
 python: 3.9.18
 pytorch: 2.1.1
-numpy: 1.23.5 
+numpy: 1.23.5
 nibabel: 3.2.2
-tigre 
+tigre
 ```
+
+The ImageCAS NPZ adaptation targets the available training server environment:
+
+```
+python: 3.12.10
+pytorch: 2.5.1 (CUDA 12.4 wheel)
+torchvision: 0.20.1
+numpy: 1.26.4
+```
+
+Use the pinned `requirements.txt` and the installation commands in the
+[ImageCAS adaptation guide](docs/IMAGECAS_ADAPTATION.md); the adaptation does
+not require TIGRE or nibabel.
 
 # 4. Code Instructions
 

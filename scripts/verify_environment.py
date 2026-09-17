@@ -21,16 +21,16 @@ EXPECTED_VERSIONS = {
     "imageio": "2.34.0",
     "lazy_loader": "0.3",
     "networkx": "3.2.1",
-    "numpy": "1.23.5",
+    "numpy": "1.26.4",
     "packaging": "24.0",
     "Pillow": "10.2.0",
     "PyWavelets": "1.5.0",
     "PyYAML": "6.0.1",
-    "scipy": "1.10.1",
-    "scikit-image": "0.21.0",
+    "scipy": "1.12.0",
+    "scikit-image": "0.22.0",
     "tifffile": "2023.12.9",
-    "torch": "2.1.1",
-    "torchvision": "0.16.1",
+    "torch": "2.5.1",
+    "torchvision": "0.20.1",
 }
 
 
@@ -91,9 +91,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"python executable: {sys.executable}")
     print(f"python version: {platform.python_version()}")
     print(f"platform: {platform.platform()}")
-    if sys.version_info[:2] != (3, 9):
+    if sys.version_info[:3] != (3, 12, 10):
         failures.append(
-            f"expected Python 3.9, found {platform.python_version()}"
+            f"expected Python 3.12.10, found {platform.python_version()}"
         )
 
     print("package versions:")
@@ -142,11 +142,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"memory={properties.total_memory / 2**30:.2f} GiB"
         )
 
-    if _base_version(str(torch.__version__)) != "2.1.1":
+    if _base_version(str(torch.__version__)) != "2.5.1":
         failures.append(f"unexpected imported torch version {torch.__version__}")
-    if str(torch.version.cuda) != "12.1":
+    if str(torch.version.cuda) != "12.4":
         failures.append(
-            f"expected the cu121 PyTorch runtime, found CUDA {torch.version.cuda}"
+            f"expected the cu124 PyTorch runtime, found CUDA {torch.version.cuda}"
         )
 
     device = torch.device(args.device)
