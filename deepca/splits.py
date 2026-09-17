@@ -273,6 +273,34 @@ def _canonicalize_scalar(value: Any, expected_vessel: str | None) -> CanonicalCa
     )
 
 
+def _is_path_stem_label(
+    field: str,
+    value: Any,
+    identifiers: Sequence[tuple[str, Any]],
+    expected_vessel: str | None,
+) -> bool:
+    """Recognize exporter ``case_name`` values that name an NPZ artifact."""
+
+    if field.casefold() != "case_name" or not isinstance(value, str):
+        return False
+    label = value.strip()
+    if not label:
+        return False
+    for other_field, path_value in identifiers:
+        if other_field.casefold() != "path" or not isinstance(path_value, str):
+            continue
+        basename = path_value.strip().replace("\\", "/").rsplit("/", 1)[-1]
+        stem = basename[:-4] if basename.casefold().endswith(".npz") else basename
+        if stem != label:
+            continue
+        try:
+            _canonicalize_scalar(path_value, expected_vessel)
+        except SplitError:
+            continue
+        return True
+    return False
+
+
 def _resolve_entry(
     entry: Any, expected_vessel: str | None
 ) -> tuple[CanonicalCase, tuple[IdentifierProvenance, ...]]:
@@ -296,8 +324,15 @@ def _resolve_entry(
         try:
             case = _canonicalize_scalar(value, expected_vessel)
         except SplitError as error:
+            if _is_path_stem_label(
+                field, value, identifiers, expected_vessel
+            ):
+                continue
             raise SplitError(f"Invalid record field {field!r}: {error}") from error
         resolved.append((field, value, case))
+
+    if not resolved:
+        raise SplitError("Case record has no resolvable case identifier.")
 
     distinct = {case for _, _, case in resolved}
     if len(distinct) != 1:

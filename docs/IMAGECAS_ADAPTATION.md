@@ -121,6 +121,12 @@ under `splits`. This mirrored form is accepted only when the ordered canonical
 IDs agree for all three partitions; the richer nested records are then used for
 provenance. Conflicting containers remain an error.
 
+In grouped LCA manifests, `case_name` may be an artifact label such as
+`prefix_02` while the physical identity appears in a path such as
+`lca/23/prefix_02.npz`. The path is authoritative only when the label exactly
+matches that path's filename stem; other invalid or conflicting identifier
+fields remain errors.
+
 ## Stage-2 camera convention
 
 Camera calculations use right-handed XYZ coordinates in metres. They reproduce
