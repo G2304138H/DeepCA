@@ -219,6 +219,56 @@ class SplitTestCase(unittest.TestCase):
         with self.assertRaisesRegex(SplitError, "Multiple candidate"):
             load_resolved_splits(path, "rca")
 
+    def test_equivalent_root_and_nested_splits_use_richer_records(self) -> None:
+        document = {
+            "schema_version": 2,
+            "train": ["/root/rca_0003.npz", "/root/rca_0001.npz"],
+            "val": ["/root/rca_0004.npz"],
+            "test": ["/root/rca_0002.npz"],
+            "splits": {
+                "training": [
+                    {"case_name": "rca_0003", "path": "/root/rca_0003.npz"},
+                    {"case_name": "rca_0001", "path": "/root/rca_0001.npz"},
+                ],
+                "validation": [
+                    {"case_name": "rca_0004", "path": "/root/rca_0004.npz"}
+                ],
+                "testing": [
+                    {"case_name": "rca_0002", "path": "/root/rca_0002.npz"}
+                ],
+            },
+        }
+        resolved = load_resolved_splits(self.write_json(document), "rca")
+
+        self.assertEqual(resolved.container_path, ("splits",))
+        self.assertEqual(resolved.train, ["rca_0003", "rca_0001"])
+        self.assertEqual(
+            resolved.aliases,
+            {"train": "training", "val": "validation", "test": "testing"},
+        )
+        self.assertEqual(
+            resolved.provenance["train"][0].location,
+            "$.splits.training[0]",
+        )
+        self.assertEqual(
+            [
+                item.field
+                for item in resolved.provenance["train"][0].identifiers
+            ],
+            ["case_name", "path"],
+        )
+
+    def test_conflicting_root_and_nested_splits_remain_ambiguous(self) -> None:
+        document = self.minimal_splits(
+            splits={
+                "train": [1],
+                "val": [2],
+                "test": [4],
+            }
+        )
+        with self.assertRaisesRegex(SplitError, "Multiple candidate"):
+            load_resolved_splits(self.write_json(document), "rca")
+
     def test_missing_split_and_non_list_split_are_rejected(self) -> None:
         missing = self.write_json(
             {"train": [1], "val": [2]}, "missing.json"
