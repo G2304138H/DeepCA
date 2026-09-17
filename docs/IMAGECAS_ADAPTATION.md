@@ -226,29 +226,35 @@ WGAN-GP objective, not byte-for-byte reproduction of the released training bug.
 Run these commands from the repository root on the Linux server. Do not use
 `sudo`, and do not modify the existing `vesseltree` environment.
 
-First inspect the server driver and Python module:
+First inspect the server driver and load the available Python 3.12 module:
 
 ```bash
+module purge
 module load python3
 nvidia-smi
 python3 --version
 ```
 
-The commands below require the loaded interpreter to be Python 3.9. If the
-module reports another minor version, load the site's Python 3.9 module before
-creating the environment.
+The verifier expects the server's reported Python `3.12.10` exactly.
 
 ```bash
-python3 -m venv /export/home2/reny0012/vir_env/deepca-imagecas-py39
-source /export/home2/reny0012/vir_env/deepca-imagecas-py39/bin/activate
+python3 -m venv /export/home2/reny0012/vir_env/deepca-imagecas-py312
+source /export/home2/reny0012/vir_env/deepca-imagecas-py312/bin/activate
 python -m pip install --upgrade pip==24.3.1 setuptools==75.8.0 wheel==0.45.1
-python -m pip install --index-url https://download.pytorch.org/whl/cu121 \
-  torch==2.1.1 torchvision==0.16.1
+python -m pip install --index-url https://download.pytorch.org/whl/cu124 \
+  torch==2.5.1 torchvision==0.20.1
 python -m pip install -r requirements.txt
+python -m pip check
 ```
 
+This is a runtime migration from the authors' Python 3.9/PyTorch 2.1 stack,
+not a claim of bit-for-bit dependency equivalence. The model, losses, and data
+contract are unchanged; NumPy remains on the 1.x line to avoid an unnecessary
+NumPy 2 API/ABI transition. Small floating-point differences from the newer
+PyTorch and CUDA runtime are still possible.
+
 There is no repository CUDA extension to build. The adapted backprojector is
-NumPy code and TIGRE is not required. The `cu121` wheel bundles a CUDA 12.1
+NumPy code and TIGRE is not required. The `cu124` wheel bundles a CUDA 12.4
 runtime; an NVIDIA driver advertising CUDA 12.5 or newer should be backward
 compatible, but that must be confirmed on the actual host with `nvidia-smi` and
 the verification below rather than assumed from the advertised version alone.
@@ -264,14 +270,14 @@ and driver information; imports the core model and scikit-image; constructs a
 small `32^3`, eight-base-filter generator plus critic; and, with `--forward`,
 runs only the small generator. It does not train. For a CPU-only import check,
 use `python scripts/verify_environment.py --device cpu --forward`; CUDA is still
-reported and the pinned `cu121` build is still required, but the forward pass
+reported and the pinned `cu124` build is still required, but the forward pass
 does not require an available GPU.
 
 After the environment has passed on the server, capture the resolved environment
 without replacing the curated requirements file:
 
 ```bash
-python -m pip freeze --all > /export/home2/reny0012/vir_env/deepca-imagecas-py39/pip-freeze.txt
+python -m pip freeze --all > /export/home2/reny0012/vir_env/deepca-imagecas-py312/pip-freeze.txt
 ```
 
 ## Training, resume, and evaluation
@@ -347,7 +353,7 @@ The evaluator applies one raw-output threshold to all cases, verifies shape,
 spacing, and origin alignment, and writes per-case JSON/CSV, aggregate statistics,
 view-count groups, optional binary NPZ predictions, and an explicit failure
 manifest beneath the configured `evaluation/test` directory. Both-empty
-Dice/clDice is 1; exactly-one-empty is 0. clDice uses scikit-image 0.21.0's
+Dice/clDice is 1; exactly-one-empty is 0. clDice uses scikit-image 0.22.0's
 deterministic Lee 3D skeletonization. To exercise evaluation on validation data
 without writing predicted volumes after a checkpoint exists:
 
