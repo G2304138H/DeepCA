@@ -1,0 +1,16 @@
+extends: imagecas_common.yaml
+
+experiment:
+  name: deepca_imagecas_lca
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/lca
+
+data:
+  vessel_type: lca
+  projection_root: /dataset/reny0012/vessel_code_stage_2_lca_paired/anchors
+  ground_truth_root: /dataset/reny0012/imagecas_voxel
+  split_json: /export/home2/reny0012/result/vessel_trees/multi_branch_experiments/vggt_branch_prefix_lca_grouped_visibility_1to7_clinical_views_refiner_5mm/split.json
+  calibration:
+    expected_detector_pixel_spacing_mm: 0.65
+    fallback_detector_pixel_spacing_mm: 0.65
+  cache:
+    directory: /export/home2/reny0012/result/deepca_imagecas/cache/lca
