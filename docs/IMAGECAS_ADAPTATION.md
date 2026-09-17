@@ -391,7 +391,10 @@ renamed bundle beneath `<output_dir>/<split>/runs/run-.../`; the CLI reports its
 `summary.json`, `failures.json`, and, when enabled, its condition-aware
 `predictions/` tree. A failed or interrupted matrix is never promoted as a
 completed run. The bundle context records the resolved config fingerprint and
-whether `--allow-checkpoint-config-mismatch` authorized the checkpoint.
+whether `--allow-checkpoint-config-mismatch` authorized the checkpoint. Every
+case/condition records Dice, clDice, its broader elapsed time, and a separate
+CUDA-synchronized generator-only `inference_seconds`; summaries aggregate that
+inference time overall and by condition.
 
 ## Missing upstream components and preserved quirks
 
@@ -549,8 +552,12 @@ spacing, and origin alignment, and writes per-case JSON/CSV, aggregate statistic
 view-count groups, optional binary NPZ predictions, and an explicit failure
 manifest beneath the configured `evaluation/test` directory. Both-empty
 Dice/clDice is 1; exactly-one-empty is 0. clDice uses scikit-image 0.22.0's
-deterministic Lee 3D skeletonization. To exercise evaluation on validation data
-without writing predicted volumes after a checkpoint exists:
+deterministic Lee 3D skeletonization. Each case records Dice, clDice, its broader
+elapsed time, and CUDA-synchronized generator-only `inference_seconds`; the
+summary aggregates inference time overall and by cohort/view-count grouping.
+Input transfer, post-processing, metrics, and serialization are excluded from
+`inference_seconds`. To exercise evaluation on validation data without writing
+predicted volumes after a checkpoint exists:
 
 ```bash
 python evaluate.py --config configs/eval_imagecas_lca.yaml --split val \

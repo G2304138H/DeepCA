@@ -25,6 +25,7 @@ from deepca.data import (
     build_projection_index,
     resolve_case_pairs,
 )
+from deepca.inference import timed_inference
 from deepca.metrics import (
     PhysicalGrid,
     aggregate_statistics,
@@ -152,11 +153,19 @@ def _stats(values: Sequence[float]) -> dict[str, float | int]:
 
 def _aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     if not rows:
-        return {"n": 0, "dice": None, "cldice": None}
+        return {
+            "n": 0,
+            "dice": None,
+            "cldice": None,
+            "inference_seconds": None,
+        }
     return {
         "n": len(rows),
         "dice": _stats([float(row["dice"]) for row in rows]),
         "cldice": _stats([float(row["cldice"]) for row in rows]),
+        "inference_seconds": _stats(
+            [float(row["inference_seconds"]) for row in rows]
+        ),
     }
 
 
@@ -202,6 +211,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "grid_spacing_xyz_mm",
         "grid_origin_xyz_mm",
         "prediction_path",
+        "inference_seconds",
         "elapsed_seconds",
     ]
     with path.open("w", encoding="utf-8", newline="") as stream:
@@ -582,8 +592,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 condition = item["input"].unsqueeze(0).to(
                     device=device, dtype=torch.float32
                 )
-                with torch.inference_mode():
-                    raw_prediction = generator(condition)[0, 0].float().cpu().numpy()
+                raw_output, inference_seconds = timed_inference(
+                    generator, condition, device=device
+                )
+                raw_prediction = raw_output[0, 0].float().cpu().numpy()
                 prediction = (raw_prediction >= threshold).astype(np.uint8)
                 target = item["target"][0].cpu().numpy().astype(np.uint8)
                 grid = _grid_from_item(item, prediction.shape)
@@ -643,6 +655,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         "prediction_path": (
                             None if prediction_path is None else str(prediction_path)
                         ),
+                        "inference_seconds": inference_seconds,
                         "elapsed_seconds": time.perf_counter() - started,
                     }
                 )
@@ -682,6 +695,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         "skeletonization": skeletonization,
         "prediction_semantics": "raw generator output >= threshold",
         "metric_grid": "per-case model grid; GT resampled nearest-neighbour before inference",
+        "metrics": ["dice", "cldice"],
+        "inference_timing": {
+            "field": "inference_seconds",
+            "unit": "seconds",
+            "scope": "generator forward pass only",
+            "clock": "time.perf_counter",
+            "cuda_synchronized": device.type == "cuda",
+            "excludes": [
+                "data loading and preprocessing",
+                "host-to-device input transfer",
+                "device-to-host output transfer",
+                "thresholding and metric computation",
+                "prediction serialization",
+            ],
+        },
         "successful_results": len(rows),
         "failed_results": len(failures),
         "checkpoint_config_mismatch_override": bool(

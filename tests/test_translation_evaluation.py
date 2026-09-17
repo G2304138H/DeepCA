@@ -226,6 +226,7 @@ class FixedTranslationEvaluationTestCase(unittest.TestCase):
 
             result_dir = Path(context["result_directory"])
             payload = json.loads((result_dir / "per_case.json").read_text())
+            summary = json.loads((result_dir / "summary.json").read_text())
             rows = payload["results"]
             self.assertEqual(len(rows), 10)
             self.assertEqual(
@@ -259,6 +260,23 @@ class FixedTranslationEvaluationTestCase(unittest.TestCase):
             self.assertTrue(all(row["feature_cache_used"] is False for row in rows))
             self.assertTrue(all(row["refined_model_metrics"] is None for row in rows))
             self.assertTrue(all(row["refined_minus_coarse"] is None for row in rows))
+            self.assertTrue(
+                all(float(row["inference_seconds"]) >= 0.0 for row in rows)
+            )
+            self.assertTrue(
+                all(
+                    float(row["elapsed_seconds"])
+                    >= float(row["inference_seconds"])
+                    for row in rows
+                )
+            )
+            self.assertEqual(
+                summary["summary"]["overall_inference_seconds"]["n"], 10
+            )
+            self.assertEqual(
+                payload["context"]["inference_timing"]["scope"],
+                "generator forward pass only",
+            )
             self.assertTrue(context["configured_cache_enabled"])
             self.assertFalse(context["effective_feature_cache_enabled"])
             self.assertEqual(context["successful_results"], 10)

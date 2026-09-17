@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 try:
     import torch
@@ -9,6 +10,7 @@ except ImportError:  # pragma: no cover - exercised on dependency-light machines
 
 if torch is not None:
     from deepca.engine import autocast_context, make_grad_scaler
+    from deepca.inference import timed_inference
     from deepca.modeling import (
         architecture_metadata,
         build_models,
@@ -49,6 +51,19 @@ class ReleasedModelTestCase(unittest.TestCase):
         with autocast_context(False, torch.device("cpu")):
             output = sample * 2.0
         torch.testing.assert_close(output, torch.full((2,), 2.0))
+
+    def test_inference_timer_synchronizes_cuda_boundaries(self) -> None:
+        sample = torch.ones(2, dtype=torch.float32)
+        with mock.patch("deepca.inference.torch.cuda.synchronize") as synchronize:
+            output, elapsed = timed_inference(
+                torch.nn.Identity(), sample, device=torch.device("cuda:0")
+            )
+        torch.testing.assert_close(output, sample)
+        self.assertGreaterEqual(elapsed, 0.0)
+        self.assertEqual(synchronize.call_count, 2)
+        synchronize.assert_has_calls(
+            [mock.call(torch.device("cuda:0")), mock.call(torch.device("cuda:0"))]
+        )
 
     def test_released_128_latent_projection_shape_is_unchanged(self) -> None:
         # Small channel width avoids allocating the full 166M-parameter model;

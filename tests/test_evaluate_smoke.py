@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import json
 import tempfile
 import unittest
@@ -138,10 +139,32 @@ class EvaluationSmokeTestCase(unittest.TestCase):
             failures = json.loads((result_root / "failures.json").read_text())
             summary = json.loads((result_root / "summary.json").read_text())
             self.assertEqual(len(per_case["results"]), 1)
-            self.assertEqual(per_case["results"][0]["case_id"], "rca_0003")
+            result = per_case["results"][0]
+            self.assertEqual(result["case_id"], "rca_0003")
+            self.assertIn("dice", result)
+            self.assertIn("cldice", result)
+            self.assertGreaterEqual(result["inference_seconds"], 0.0)
+            self.assertGreaterEqual(
+                result["elapsed_seconds"], result["inference_seconds"]
+            )
             self.assertFalse(failures["failures"])
             self.assertEqual(summary["summary"]["overall"]["n"], 1)
-            prediction_path = Path(per_case["results"][0]["prediction_path"])
+            self.assertEqual(
+                summary["summary"]["overall"]["inference_seconds"]["n"], 1
+            )
+            self.assertEqual(
+                per_case["context"]["inference_timing"]["scope"],
+                "generator forward pass only",
+            )
+            with (result_root / "per_case.csv").open(
+                encoding="utf-8", newline=""
+            ) as stream:
+                csv_rows = list(csv.DictReader(stream))
+            self.assertEqual(len(csv_rows), 1)
+            self.assertIn("dice", csv_rows[0])
+            self.assertIn("cldice", csv_rows[0])
+            self.assertIn("inference_seconds", csv_rows[0])
+            prediction_path = Path(result["prediction_path"])
             self.assertTrue(prediction_path.is_file())
 
             mismatched = copy.deepcopy(config)
