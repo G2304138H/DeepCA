@@ -18,16 +18,24 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 
 EXPECTED_VERSIONS = {
+    "contourpy": "1.3.0",
+    "cycler": "0.12.1",
+    "fonttools": "4.65.0",
     "imageio": "2.34.0",
+    "kiwisolver": "1.5.1",
     "lazy_loader": "0.3",
+    "matplotlib": "3.9.2",
     "networkx": "3.2.1",
     "numpy": "1.26.4",
     "packaging": "24.0",
     "Pillow": "10.2.0",
+    "pyparsing": "3.1.4",
+    "python-dateutil": "2.9.0.post0",
     "PyWavelets": "1.5.0",
     "PyYAML": "6.0.1",
     "scipy": "1.12.0",
     "scikit-image": "0.22.0",
+    "six": "1.17.0",
     "tifffile": "2023.12.9",
     "torch": "2.5.1",
     "torchvision": "0.20.1",
@@ -106,6 +114,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
 
     try:
+        import matplotlib
         import numpy as np
         import scipy
         import skimage
@@ -122,6 +131,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
 
     print("required import check: OK")
+    print(f"matplotlib import version: {matplotlib.__version__}")
     print(f"numpy import version: {np.__version__}")
     print(f"scipy import version: {scipy.__version__}")
     print(f"PyYAML import version: {yaml.__version__}")

@@ -566,6 +566,69 @@ python evaluate.py --config configs/eval_imagecas_rca.yaml --split val \
   --no-save-predictions
 ```
 
+### Predicted-volume visualization
+
+Visualization is a separate post-processing step: it does not run the model,
+change the prediction, or contribute to Dice, clDice, or inference timing. The
+implementation follows the useful outputs of AutoCar's predicted-volume
+visualizer while using DeepCA's own saved-volume schema and physical-coordinate
+convention. In particular, DeepCA's saved `origin` is the physical centre of
+voxel index zero; the visualizer does not introduce a half-voxel offset.
+
+For a standard evaluation, select a case and view count from `per_case.json`:
+
+```bash
+cd /export/home2/reny0012/code/DeepCA
+source /export/home2/reny0012/vir_env/deepca-imagecas-py312/bin/activate
+
+python scripts/visualize_prediction.py \
+  --evaluation-dir /export/home2/reny0012/result/deepca_imagecas/lca/evaluation/test \
+  --case-id lca_0001 \
+  --num-views 2
+
+python scripts/visualize_prediction.py \
+  --evaluation-dir /export/home2/reny0012/result/deepca_imagecas/rca/evaluation/test \
+  --case-id rca_0001 \
+  --num-views 2
+```
+
+The command reads the selected row's saved prediction, projection, and
+ground-truth paths. It resamples the original XYZ ground truth onto the exact
+saved DeepCA ZYX model grid before drawing the overlay. The default output is
+`evaluation/test/visualizations/views_2/<case_id>`. Existing output is protected;
+pass `--overwrite` only when intentionally replacing that case's bundle.
+
+A saved prediction can also be rendered without an evaluation manifest:
+
+```bash
+python scripts/visualize_prediction.py \
+  --prediction /path/to/predictions/views_2/lca_0001.npz \
+  --ground-truth /dataset/reny0012/imagecas_voxel/lca/1.npz \
+  --projection /path/to/stage_2/lca_0001.npz \
+  --output-dir /path/to/visualizations/lca_0001
+```
+
+For the fixed-translation evaluation, pass its reported `result_directory` as
+`--evaluation-dir` and use `--condition-id` instead of `--num-views` to select
+one of the ten rows for the case. Use `--gif-frames 0` to skip the rotating
+animation or reduce `--max-elements` for a lighter preview.
+
+Each successful bundle contains:
+
+- `input_views.png`, when a projection archive is available;
+- `volume_comparison.png`, with orthogonal prediction/ground-truth overlays;
+- `predicted_centerline_graph.npz`, a Lee-skeleton 26-neighbour graph with
+  Euclidean-distance-transform radius estimates in millimetres;
+- `predicted_radius_surface.ply`, a marching-cubes surface with per-vertex
+  radius and RGB fields;
+- `predicted_surface_centerline_radius.png` and, by default, a rotating GIF;
+- `manifest.json`, recording the physical grid, source paths, threshold,
+  derivation, component/node/mesh counts, and artifact names.
+
+The graph and radius-coloured surface are visualization-derived geometry, not a
+second reconstruction model. An empty prediction still produces the graph,
+comparison image, and manifest, but cannot produce a PLY mesh or rotating GIF.
+
 ### Small real-data loader and forward smoke test
 
 The checked-in smoke utility reads one real projection/GT pair through the same
