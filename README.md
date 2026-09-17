@@ -86,6 +86,18 @@ python evaluate.py --config configs/eval_imagecas_rca.yaml --split test
 python evaluate.py --config configs/eval_imagecas_lca.yaml --split test
 ```
 
+Run the fixed two-view translational calibration robustness evaluation with its
+separate LCA/RCA templates:
+
+```bash
+python evaluate.py --config configs/eval_imagecas_rca_fixed_translation.yaml --split test
+python evaluate.py --config configs/eval_imagecas_lca_fixed_translation.yaml --split test
+```
+
+The exact nine-condition plan, positive patient-axis convention, zero-translation
+Dice gate, cache policy, visibility diagnostics, and interpretation limits are
+specified in the [ImageCAS adaptation guide](docs/IMAGECAS_ADAPTATION.md#fixed-two-view-translational-calibration-robustness-evaluation).
+
 ## Training Data Preparation
 
 Our training data are based on the segmented CCTA data (label) from [ImageCAS](https://github.com/XiaoweiXu/ImageCAS-A-Large-Scale-Dataset-and-Benchmark-for-Coronary-Artery-Segmentation-based-on-CT).

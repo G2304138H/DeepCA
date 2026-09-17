@@ -258,6 +258,45 @@ class SplitTestCase(unittest.TestCase):
             ["case_name", "path"],
         )
 
+    def test_lca_path_stem_case_names_use_the_physical_case_path(self) -> None:
+        def record(case_number: int) -> dict[str, str]:
+            path = f"/features/lca/{case_number}/prefix_02.npz"
+            return {"case_name": "prefix_02", "path": path}
+
+        document = {
+            "schema_version": 2,
+            "train": [
+                "/features/lca/1/prefix_02.npz",
+                "/features/lca/2/prefix_02.npz",
+            ],
+            "val": ["/features/lca/3/prefix_02.npz"],
+            "test": ["/features/lca/4/prefix_02.npz"],
+            "splits": {
+                "train": [record(1), record(2)],
+                "val": [record(3)],
+                "test": [record(4)],
+            },
+        }
+        resolved = load_resolved_splits(self.write_json(document), "lca")
+
+        self.assertEqual(resolved.container_path, ("splits",))
+        self.assertEqual(resolved.train, ["lca_0001", "lca_0002"])
+        self.assertEqual(
+            [
+                item.field
+                for item in resolved.provenance["train"][0].identifiers
+            ],
+            ["path"],
+        )
+        with self.assertRaisesRegex(SplitError, "Invalid record field 'case_name'"):
+            canonicalize_case_id(
+                {
+                    "case_name": "different_prefix",
+                    "path": "/features/lca/1/prefix_02.npz",
+                },
+                "lca",
+            )
+
     def test_conflicting_root_and_nested_splits_remain_ambiguous(self) -> None:
         document = self.minimal_splits(
             splits={

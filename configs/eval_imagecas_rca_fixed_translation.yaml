@@ -1,0 +1,25 @@
+extends: eval_imagecas_rca.yaml
+
+# Fixed-positive-direction plan (implemented as immutable evaluator constants):
+# Y/XZ/XYZ at total Euclidean magnitudes 5, 10, and 20 mm.  In every
+# condition delta-theta = delta-phi = 0 degrees, input position 0 remains the
+# stored accurate view, and only input position 1 is re-rendered.
+data:
+  cache:
+    enabled: false
+
+evaluation:
+  mode: fixed_two_view_translation
+  view_counts: [2]
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca/evaluation_fixed_two_view_translation
+  fixed_two_view_translation:
+    perturbed_input_position: 1
+    minimum_clean_rerender_dice: 0.98
+    visibility_warning_threshold: 0.95
+    fail_below_visibility_threshold: false
+    renderer_num_circle_points: 120
+    render_mode_fallback: filled
+    maximum_center_offset_difference_mm: 0.01
+    # This cohort was generated from every valid artery branch. Archives that
+    # predate projected_branch_indices may therefore use that verified policy.
+    missing_projected_branch_policy: all

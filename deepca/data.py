@@ -492,6 +492,103 @@ def _file_signature(path: Path) -> dict[str, object]:
     return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
+def _float32_array_sha256(array: np.ndarray) -> str:
+    """Hash an array's exact canonical float32 shape and values."""
+
+    canonical = np.ascontiguousarray(array, dtype=np.dtype("<f4"))
+    digest = hashlib.sha256()
+    digest.update(np.asarray(canonical.shape, dtype=np.dtype("<i8")).tobytes())
+    digest.update(canonical.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _normalise_image_replacements(
+    replacements: Optional[Mapping[str, Mapping[int, np.ndarray]]],
+    *,
+    case_ids: Sequence[str],
+) -> dict[str, dict[int, np.ndarray]]:
+    """Validate and defensively copy per-case source-view replacement images."""
+
+    if replacements is None:
+        return {}
+    if not isinstance(replacements, Mapping):
+        raise TypeError(
+            "image_replacements must map case IDs to source-view image mappings."
+        )
+
+    known_case_ids = {str(case_id).strip().lower() for case_id in case_ids}
+    normalised: dict[str, dict[int, np.ndarray]] = {}
+    for raw_case_id, raw_case_replacements in replacements.items():
+        if not isinstance(raw_case_id, str) or not raw_case_id.strip():
+            raise TypeError("image_replacements case IDs must be non-empty strings.")
+        case_id = raw_case_id.strip().lower()
+        if case_id not in known_case_ids:
+            raise ValueError(
+                f"image_replacements contains unknown case ID {raw_case_id!r}."
+            )
+        if case_id in normalised:
+            raise ValueError(
+                f"image_replacements contains duplicate normalized case ID {case_id!r}."
+            )
+        if not isinstance(raw_case_replacements, Mapping):
+            raise TypeError(
+                f"image_replacements[{raw_case_id!r}] must map source-view indices "
+                "to 2D images."
+            )
+
+        case_replacements: dict[int, np.ndarray] = {}
+        for raw_view_index, raw_image in raw_case_replacements.items():
+            if isinstance(raw_view_index, (bool, np.bool_)) or not isinstance(
+                raw_view_index, (int, np.integer)
+            ):
+                raise TypeError(
+                    f"image_replacements[{case_id!r}] source-view indices must be "
+                    f"integers, got {raw_view_index!r}."
+                )
+            view_index = int(raw_view_index)
+            if view_index < 0:
+                raise ValueError(
+                    f"image_replacements[{case_id!r}] source-view index must be "
+                    f"non-negative, got {view_index}."
+                )
+
+            image = np.asarray(raw_image)
+            if image.ndim != 2:
+                raise ValueError(
+                    f"image_replacements[{case_id!r}][{view_index}] must be a 2D "
+                    f"detector image, got shape {image.shape}."
+                )
+            if not (
+                np.issubdtype(image.dtype, np.bool_)
+                or np.issubdtype(image.dtype, np.integer)
+                or np.issubdtype(image.dtype, np.floating)
+            ):
+                raise TypeError(
+                    f"image_replacements[{case_id!r}][{view_index}] must contain "
+                    "real numeric values."
+                )
+            if not np.isfinite(image).all():
+                raise ValueError(
+                    f"image_replacements[{case_id!r}][{view_index}] contains NaN "
+                    "or infinity."
+                )
+            if np.any(image < 0):
+                raise ValueError(
+                    f"image_replacements[{case_id!r}][{view_index}] contains "
+                    "negative values."
+                )
+            with np.errstate(over="ignore", invalid="ignore"):
+                float_image = np.asarray(image, dtype=np.float32)
+            if not np.isfinite(float_image).all():
+                raise ValueError(
+                    f"image_replacements[{case_id!r}][{view_index}] cannot be "
+                    "represented as finite float32 values."
+                )
+            case_replacements[view_index] = np.ascontiguousarray(float_image).copy()
+        normalised[case_id] = case_replacements
+    return normalised
+
+
 class ImageCASDataset(Dataset):
     """Generate the released DeepCA 3D input directly from paired NPZ files."""
 
@@ -502,6 +599,9 @@ class ImageCASDataset(Dataset):
         *,
         training: bool,
         num_views_override: Optional[int] = None,
+        image_replacements: Optional[
+            Mapping[str, Mapping[int, np.ndarray]]
+        ] = None,
     ) -> None:
         if torch is None:
             raise ImportError("PyTorch is required to construct ImageCASDataset.")
@@ -511,6 +611,10 @@ class ImageCASDataset(Dataset):
         self.config = config
         self.training = bool(training)
         self.epoch = 0
+        self.image_replacements = _normalise_image_replacements(
+            image_replacements,
+            case_ids=[pair.case_id for pair in self.pairs],
+        )
         data_config = config["data"]
         preprocessing = data_config["preprocessing"]
         target_config = data_config.get("ground_truth", {})
@@ -594,6 +698,46 @@ class ImageCASDataset(Dataset):
             epoch=self.epoch if self.training else 0,
             case_id=pair.case_id,
         )
+        case_replacements = self.image_replacements.get(pair.case_id, {})
+        invalid_indices = sorted(
+            index for index in case_replacements if index >= projection.num_views
+        )
+        if invalid_indices:
+            raise ValueError(
+                f"{pair.case_id}: replacement source-view indices {invalid_indices} "
+                f"are outside the available range 0..{projection.num_views - 1}."
+            )
+        detector_shape = tuple(int(value) for value in projection.images.shape[1:])
+        for source_view_index, replacement in case_replacements.items():
+            if replacement.shape != detector_shape:
+                raise ValueError(
+                    f"{pair.case_id}: replacement for source view {source_view_index} "
+                    f"has detector shape {replacement.shape}, expected {detector_shape}."
+                )
+        selected_index_set = set(int(value) for value in indices)
+        unselected_indices = sorted(set(case_replacements).difference(selected_index_set))
+        if unselected_indices:
+            raise ValueError(
+                f"{pair.case_id}: replacement source-view indices {unselected_indices} "
+                f"are not in the ordered selected views {indices.tolist()}."
+            )
+
+        selected = np.ascontiguousarray(projection.images[indices], dtype=np.float32)
+        selected = selected.copy()
+        replaced_view_indices: list[int] = []
+        replacement_sha256_by_view: dict[str, str] = {}
+        for selected_position, source_view_index_value in enumerate(indices):
+            source_view_index = int(source_view_index_value)
+            replacement = case_replacements.get(source_view_index)
+            if replacement is None:
+                continue
+            selected[selected_position] = replacement
+            replaced_view_indices.append(source_view_index)
+            replacement_sha256_by_view[str(source_view_index)] = (
+                _float32_array_sha256(replacement)
+            )
+        selected_images_sha256 = _float32_array_sha256(selected)
+
         if projection.projection_center_offset_xyz_mm is None:
             center_mm = (np.asarray(gt.volume_xyz.shape) - 1) * gt.spacing_xyz_mm / 2.0
             center_source = "ground_truth_physical_center"
@@ -616,12 +760,17 @@ class ImageCASDataset(Dataset):
         grid = make_cubic_grid(self.volume_size, fov_mm, center_mm)
 
         cache_payload = {
-            "schema_version": 2,
+            "schema_version": 3,
             "algorithm": "stage2_binary_cone_support_backprojection_v1",
             "projection": _file_signature(pair.projection_path),
             "ground_truth": _file_signature(pair.ground_truth_path),
             "case_id": pair.case_id,
             "view_indices": indices.tolist(),
+            "selected_images_sha256": selected_images_sha256,
+            "image_replacements": {
+                "source_view_indices": replaced_view_indices,
+                "sha256_by_source_view": replacement_sha256_by_view,
+            },
             "sid_m": projection.sid_m,
             "sod_m": projection.source_to_isocentre_m,
             "pixel_spacing_mm": projection.detector_pixel_spacing_mm,
@@ -655,7 +804,6 @@ class ImageCASDataset(Dataset):
             if input_volume.shape != grid.shape_zyx or target_volume.shape != grid.shape_zyx:
                 raise ValueError(f"Corrupt cache shape in {cache_path}.")
         else:
-            selected = projection.images[indices]
             input_volume = binary_cone_backproject(
                 selected,
                 projection.theta_deg[indices],
@@ -697,6 +845,9 @@ class ImageCASDataset(Dataset):
             "projection_path": str(pair.projection_path),
             "ground_truth_path": str(pair.ground_truth_path),
             "view_indices": indices.tolist(),
+            "replaced_view_indices": replaced_view_indices,
+            "selected_images_sha256": selected_images_sha256,
+            "replacement_images_sha256": replacement_sha256_by_view,
             "clinical_views": [projection.clinical_views[index] for index in indices],
             "theta_deg": projection.theta_deg[indices].astype(float).tolist(),
             "phi_deg": projection.phi_deg[indices].astype(float).tolist(),

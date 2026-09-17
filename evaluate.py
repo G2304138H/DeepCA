@@ -48,6 +48,33 @@ SPLIT_ALIASES = {
 }
 
 
+def _is_fixed_translation_mode(value: object) -> bool:
+    normalized = (
+        str(value or "standard")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+    return normalized in {
+        "fixed_two_view_translation",
+        "fixed_two_view_translational_calibration",
+        "fixed_positive_direction_translation",
+        "second_view_translation_robustness",
+    }
+
+
+def _is_standard_evaluation_mode(value: object) -> bool:
+    normalized = (
+        str(value or "standard")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+    return normalized in {"", "standard", "ordinary"}
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="Evaluation YAML configuration.")
@@ -344,6 +371,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     view_counts = _parse_view_counts(
         args.view_counts if args.view_counts is not None else evaluation.get("view_counts", [2])
     )
+    evaluation_mode = evaluation.get("mode", "standard")
+    fixed_translation_mode = _is_fixed_translation_mode(evaluation_mode)
+    if not fixed_translation_mode and not _is_standard_evaluation_mode(
+        evaluation_mode
+    ):
+        raise ValueError(f"Unsupported evaluation.mode {evaluation_mode!r}.")
+    if fixed_translation_mode and view_counts != [2]:
+        raise ValueError(
+            "Fixed two-view translation evaluation requires exactly view_counts: [2]."
+        )
     output_dir = Path(evaluation["output_dir"]).expanduser().resolve() / split
     output_dir.mkdir(parents=True, exist_ok=True)
     save_resolved_config(config, output_dir / "resolved_config.yaml")
@@ -467,6 +504,57 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     rows: list[dict[str, Any]] = []
     save_predictions = bool(evaluation.get("save_predictions", True)) and not args.no_save_predictions
+    if fixed_translation_mode:
+        if failures or len(pairs) != len(case_ids):
+            error = RuntimeError(
+                "Fixed translation evaluation requires the identical complete ordered "
+                "case set for the accurate control and all nine perturbations; one or "
+                "more configured cases could not be paired."
+            )
+            return _terminal_failure(
+                output_dir,
+                stage="fixed_translation_case_pairing",
+                error=error,
+                vessel=vessel,
+                split=split,
+                config=config,
+                case_ids=case_ids,
+            )
+        try:
+            from deepca.translation_evaluation import (
+                run_fixed_translation_evaluation,
+            )
+
+            context = run_fixed_translation_evaluation(
+                config=config,
+                pairs=pairs,
+                generator=generator,
+                device=device,
+                threshold=threshold,
+                checkpoint_path=checkpoint_path,
+                checkpoint_sha256=_sha256(checkpoint_path),
+                checkpoint_config_mismatch_override=bool(
+                    args.allow_checkpoint_config_mismatch
+                ),
+                config_fingerprint_value=config_fingerprint(config),
+                split=split,
+                split_manifest=resolved_splits.as_manifest(),
+                output_dir=output_dir,
+                save_predictions=save_predictions,
+            )
+        except Exception as error:
+            return _terminal_failure(
+                output_dir,
+                stage="fixed_two_view_translation_evaluation",
+                error=error,
+                vessel=vessel,
+                split=split,
+                config=config,
+                case_ids=case_ids,
+            )
+        print(json.dumps({"output_dir": str(output_dir), **context}, sort_keys=True))
+        return 0
+
     for num_views in view_counts:
         if not pairs:
             break

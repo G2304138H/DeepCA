@@ -69,14 +69,20 @@ Supported calibration and identity fields are:
 The attached RCA example contains seven binary `256 x 256` views, angles,
 `view_features`, `projection_center_offset`, `sample_name`, and `source_relpath`.
 It contains neither SID nor detector pixel spacing, so both configured fallbacks
-are required. Extra fields such as `artery`, branch annotations, and basis
-coefficients are not used by DeepCA.
+are required.
 
 Ground-truth archives require:
 
 - `vol`: a non-negative 3D integer or integer-like labelled volume in explicit
   `[X,Y,Z]` array order; all labels `> 0` become vessel foreground;
 - `spacing`: three positive voxel spacings `[sx,sy,sz]` in millimetres.
+
+Ordinary DeepCA training and evaluation ignore extra projection fields such as
+`artery`, branch annotations, and basis coefficients. The fixed translation
+evaluation documented below is the exception: it requires `artery` and the
+recorded `projection_center_offset`, consumes branch/render provenance when
+available, and otherwise permits only the template's explicit verified
+all-branch cohort assertion.
 
 The attached ground-truth example is `uint8 [512,512,275]`, with spacing
 `[0.376953125, 0.376953125, 0.5] mm`. The model tensor is explicitly
@@ -120,6 +126,12 @@ Schema-v2 manifests may contain legacy path lists at the root and richer records
 under `splits`. This mirrored form is accepted only when the ordered canonical
 IDs agree for all three partitions; the richer nested records are then used for
 provenance. Conflicting containers remain an error.
+
+In grouped LCA manifests, `case_name` may be an artifact label such as
+`prefix_02` while the physical identity appears in a path such as
+`lca/23/prefix_02.npz`. The path is authoritative only when the label exactly
+matches that path's filename stem; other invalid or conflicting identifier
+fields remain errors.
 
 ## Stage-2 camera convention
 
@@ -202,6 +214,184 @@ or more than two views is supported for controlled comparison, but raw summation
 changes the input range to `{0,...,V}` and is a scientific deviation. `mean` and
 `union` aggregation are also explicit deviations and must not be mixed within an
 experiment. Selected view indices and calibration are recorded per case.
+
+## Fixed two-view translational calibration robustness evaluation
+
+`evaluation.mode: fixed_two_view_translation` is a **fixed two-view
+translational calibration robustness evaluation**. It is not an angle-robustness
+experiment: every control and perturbed condition has
+`delta_theta = 0 degrees` and `delta_phi = 0 degrees`. It is also specifically a
+**fixed-positive-direction translational stress test**, not evidence of
+direction-independent translation robustness.
+
+The evaluation locks the case set and the same ordered pair of source views for
+the accurate control and all nine perturbations. In that pair:
+
+- input view 1 (selected-input position 0 in code) is the stored, geometrically
+  accurate projection and is never re-rendered;
+- input view 2 (selected-input position 1 in code) is re-rendered after
+  translating the projection-centred 3D artery;
+- both nominal `theta_deg` and `phi_deg` values and their view-direction
+  encodings remain unchanged;
+- the target vessel, model checkpoint, model weights, and source dataset files
+  remain unchanged; and
+- every projection-derived model input is recomputed after replacing view 2.
+  For DeepCA this means rebuilding the two-view cone-support backprojection;
+  DeepCA has no separate learned 2D image-feature extractor.
+
+The configured magnitude `d` is the total Euclidean displacement, not a
+per-active-axis displacement. The evaluator's plan is fixed to the following
+nine conditions plus one accurate two-view control:
+
+| Condition | delta theta | delta phi | delta x (mm) | delta y (mm) | delta z (mm) | Total |
+|---|---:|---:|---:|---:|---:|---:|
+| `Y-5` | 0 degrees | 0 degrees | 0 | 5 | 0 | 5 mm |
+| `Y-10` | 0 degrees | 0 degrees | 0 | 10 | 0 | 10 mm |
+| `Y-20` | 0 degrees | 0 degrees | 0 | 20 | 0 | 20 mm |
+| `XZ-5` | 0 degrees | 0 degrees | 3.5355 | 0 | 3.5355 | 5 mm |
+| `XZ-10` | 0 degrees | 0 degrees | 7.0711 | 0 | 7.0711 | 10 mm |
+| `XZ-20` | 0 degrees | 0 degrees | 14.1421 | 0 | 14.1421 | 20 mm |
+| `XYZ-5` | 0 degrees | 0 degrees | 2.8868 | 2.8868 | 2.8868 | 5 mm |
+| `XYZ-10` | 0 degrees | 0 degrees | 5.7735 | 5.7735 | 5.7735 | 10 mm |
+| `XYZ-20` | 0 degrees | 0 degrees | 11.5470 | 11.5470 | 11.5470 | 20 mm |
+
+The displayed components are rounded to four decimal places. The evaluator
+computes and records them from the formulas below at full floating-point
+precision, so each vector's norm is exactly its configured `d` up to numerical
+precision:
+
+```text
+delta_t_Y   = (0, d, 0)
+delta_t_XZ  = d / sqrt(2) * (1, 0, 1)
+delta_t_XYZ = d / sqrt(3) * (1, 1, 1)
+```
+
+### Coordinates, centring, and sign convention
+
+The vectors use the current vessel-code patient convention, before conversion
+to DeepCA's `[C,Z,Y,X]` tensor layout:
+
+- `+x`: patient left;
+- `+y`: patient anterior, away from the table; and
+- `+z`: patient superior, toward the head.
+
+Only those positive directions are sampled. A codebase with a different
+patient coordinate system must transform these physical vectors into its own
+coordinates before rendering; relabelling components without a coordinate
+transform changes the experiment.
+
+Let `C` be the original artery in metres and `o_centre` the exact centring
+offset used to create the stored accurate projections. The renderer uses
+
+```text
+C^(0)       = C - o_centre
+C_input_1   = C^(0)
+C_input_2   = C^(0) + 1e-3 * delta_t_2
+```
+
+where `delta_t_2` is one of the millimetre vectors above and `1e-3` converts
+millimetres to metres. The recorded vector therefore means **translate the
+projection-centred artery by `+delta_t_2`**. This is geometrically equivalent
+to translating the source-detector system or isocentre by `-delta_t_2`; results
+must not mix those two sign conventions. The evaluation output records both the
+artery translation and its equivalent inverse system translation.
+
+The archive's `projection_center_offset` is mandatory and authoritative in this
+mode; the evaluator never substitutes a target-volume centre or a newly
+estimated offset. It independently regenerates the tube surface and recomputes
+the expected offset as an audit. The run fails if that audit differs from the
+recorded offset by more than `0.01 mm`, before the recorded offset is applied to
+both the surface and centreline.
+
+For view 2, the renderer reuses the original theta, phi, SID, detector spacing,
+image size, branch subset, centring rule, mask-render mode, and all other render
+settings. It replaces only that second image, keeps both nominal camera
+encodings unchanged, rebuilds the projection-derived DeepCA input, and compares
+the generator prediction with the original canonical target.
+
+### Mandatory controls and cache policy
+
+Before any non-zero condition for a case, view 2 is re-rendered with a zero
+translation. Its binary mask must achieve Dice at least `0.98` against the
+stored second-view image. Failure is a hard validity error: it indicates that
+the renderer, projected branch subset, artery centring, or stored calibration
+does not reproduce the original evidence, so a translated result would not be
+a controlled perturbation. This gate is not a model-performance metric.
+The threshold cannot be configured below `0.98`, and both the stored image and
+clean re-render must contain foreground vessel pixels; an empty/empty Dice of
+one is explicitly rejected.
+
+Projection-dependent caching is disabled in both checked-in translation
+templates. Reusing the ordinary accurate-image cache would silently erase the
+intervention. Another implementation may enable a cache only if its key includes
+the full resolved translation vector (including zero), selected ordered view
+indices, renderer settings/version, branch subset, centring offset, calibration,
+and all existing preprocessing fields. Regardless of cache implementation, the
+second image and all image-derived features or backprojections must be
+recomputed for each condition.
+
+The templates also fix `renderer_num_circle_points: 120`, warn when translated
+centreline visibility is below `0.95`, and retain such cases by default
+(`fail_below_visibility_threshold: false`). Visibility is an interpretation
+aid, not a substitute target or post-hoc inclusion rule.
+
+The supplied Stage-2 all-branch cohorts predate per-file
+`projected_branch_indices` in some exports, so the templates explicitly declare
+`missing_projected_branch_policy: all`. This is a cohort provenance assertion,
+not a generic fallback. Other datasets must store their exact projected branch
+indices or change neither this assertion nor the branch subset without rebuilding
+and validating their provenance. Output records whether branch indices,
+rendering mode, circle-point count, SID, and detector spacing came from the
+archive or an explicit configured cohort value.
+
+### Required records and interpretation
+
+For the accurate control and every translated condition, retain enough
+per-case data to reconstruct the comparison:
+
+- condition identifier, full-precision artery translation vector, inverse
+  source-detector/isocentre vector, and total Euclidean magnitude;
+- both ordered source-view indices and their unchanged theta and phi;
+- zero-translation view-2 re-render Dice and the branch subset and centring
+  provenance used by the renderer;
+- visible centreline-point fraction and visible vessel-surface-point fraction;
+- stored and translated view-2 foreground-pixel counts or ratios;
+- DeepCA generator metrics for the accurate control and perturbed condition;
+  and
+- absolute and relative metric changes from the accurate two-view control.
+
+The visible fractions must measure the proportion of the translated 3D
+centreline points and rendered surface samples whose projections remain inside
+the detector. Inspect them together with foreground-pixel changes, especially at
+20 mm: detector clipping is a loss of input evidence and must not be reported as
+intrinsic model sensitivity alone.
+
+DeepCA has one inference-time generator. Its critic is a training-only
+adversarial component, not a coarse model or refiner, and this repository does
+not run a separate refinement stage. When comparing with a result schema that
+expects coarse and refined predictions, the DeepCA generator may be identified
+as the sole/coarse prediction, while refined metrics and
+`refined-minus-coarse` must be recorded as not applicable rather than duplicated
+or invented.
+
+The LCA and RCA templates inherit their normal evaluation configs, require
+exactly two views, disable the data cache, and write to cohort-specific output
+roots distinct from ordinary evaluation:
+
+```bash
+python evaluate.py \
+  --config configs/eval_imagecas_lca_fixed_translation.yaml --split test
+python evaluate.py \
+  --config configs/eval_imagecas_rca_fixed_translation.yaml --split test
+```
+
+A successful fixed-translation evaluation publishes one immutable, atomically
+renamed bundle beneath `<output_dir>/<split>/runs/run-.../`; the CLI reports its
+`result_directory`. That bundle contains `per_case.json`, `per_case.csv`,
+`summary.json`, `failures.json`, and, when enabled, its condition-aware
+`predictions/` tree. A failed or interrupted matrix is never promoted as a
+completed run. The bundle context records the resolved config fingerprint and
+whether `--allow-checkpoint-config-mismatch` authorized the checkpoint.
 
 ## Missing upstream components and preserved quirks
 
