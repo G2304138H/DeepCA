@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -276,6 +278,183 @@ class ImageCASDataTestCase(unittest.TestCase):
         self.assertEqual(len(list((self.root / "cache" / "rca").glob("*.npz"))), 2)
 
     @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_image_replacement_uses_source_index_after_ordered_selection(self) -> None:
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt" / "rca" / "1.npz"
+        self.write_projection(
+            projection,
+            image_size=32,
+            views=3,
+            center_m=(0.0155, 0.0155, 0.0155),
+        )
+        self.write_gt(gt, shape=(32, 32, 32))
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config()
+        config["data"]["views"]["indices"] = [2, 0]  # type: ignore[index]
+
+        replacement = np.zeros((32, 32), dtype=np.float64)
+        dataset = ImageCASDataset(
+            [pair],
+            config,
+            training=False,
+            image_replacements={"RCA_0001": {np.int64(0): replacement}},
+        )
+        replacement.fill(7.0)  # The dataset owns a defensive copy.
+        with mock.patch(
+            "deepca.data.binary_cone_backproject",
+            return_value=np.zeros((32, 32, 32), dtype=np.float32),
+        ) as backproject:
+            item = dataset[0]
+
+        selected = backproject.call_args.args[0]
+        np.testing.assert_array_equal(selected[0], np.ones((32, 32), dtype=np.float32))
+        np.testing.assert_array_equal(selected[1], np.zeros((32, 32), dtype=np.float32))
+        metadata = json.loads(item["metadata_json"])
+        self.assertEqual(metadata["view_indices"], [2, 0])
+        self.assertEqual(metadata["replaced_view_indices"], [0])
+        self.assertEqual(metadata["theta_deg"], [30.0, 0.0])
+        self.assertEqual(metadata["phi_deg"], [70.0, 90.0])
+        self.assertEqual(
+            sorted(metadata["replacement_images_sha256"]), ["0"]
+        )
+        self.assertEqual(len(metadata["replacement_images_sha256"]["0"]), 64)
+        self.assertEqual(len(metadata["selected_images_sha256"]), 64)
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_image_replacement_constructor_validation_is_strict(self) -> None:
+        pair = CasePair(
+            "rca_0001",
+            "rca",
+            1,
+            (self.root / "rca_0001.npz").resolve(),
+            (self.root / "1.npz").resolve(),
+        )
+        config = self.dataset_config()
+        valid = np.zeros((32, 32), dtype=np.float32)
+        invalid_replacements = (
+            (
+                {"rca_9999": {0: valid}},
+                ValueError,
+                "unknown case ID",
+            ),
+            (
+                {"rca_0001": {"0": valid}},
+                TypeError,
+                "indices must be integers",
+            ),
+            (
+                {"rca_0001": {-1: valid}},
+                ValueError,
+                "must be non-negative",
+            ),
+            (
+                {"rca_0001": {0: np.zeros((2, 2, 2))}},
+                ValueError,
+                "must be a 2D detector image",
+            ),
+            (
+                {"rca_0001": {0: np.full((32, 32), np.nan)}},
+                ValueError,
+                "contains NaN or infinity",
+            ),
+            (
+                {"rca_0001": {0: np.full((32, 32), -1.0)}},
+                ValueError,
+                "contains negative values",
+            ),
+        )
+        for replacements, error_type, message in invalid_replacements:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(error_type, message):
+                    ImageCASDataset(
+                        [pair],
+                        config,
+                        training=False,
+                        image_replacements=replacements,  # type: ignore[arg-type]
+                    )
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_image_replacement_validates_source_index_and_detector_shape(self) -> None:
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt" / "rca" / "1.npz"
+        self.write_projection(
+            projection,
+            image_size=32,
+            center_m=(0.0155, 0.0155, 0.0155),
+        )
+        self.write_gt(gt, shape=(32, 32, 32))
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config()
+
+        outside = ImageCASDataset(
+            [pair],
+            config,
+            training=False,
+            image_replacements={"rca_0001": {2: np.zeros((32, 32))}},
+        )
+        with self.assertRaisesRegex(ValueError, "outside the available range"):
+            outside[0]
+
+        wrong_shape = ImageCASDataset(
+            [pair],
+            config,
+            training=False,
+            image_replacements={"rca_0001": {1: np.zeros((31, 32))}},
+        )
+        with self.assertRaisesRegex(ValueError, "has detector shape"):
+            wrong_shape[0]
+
+        one_view_config = self.dataset_config()
+        one_view_config["data"]["views"]["count"] = 1  # type: ignore[index]
+        not_selected = ImageCASDataset(
+            [pair],
+            one_view_config,
+            training=False,
+            image_replacements={"rca_0001": {1: np.zeros((32, 32))}},
+        )
+        with self.assertRaisesRegex(ValueError, "not in the ordered selected views"):
+            not_selected[0]
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_cache_key_includes_exact_selected_replacement_images(self) -> None:
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt" / "rca" / "1.npz"
+        self.write_projection(
+            projection,
+            image_size=32,
+            center_m=(0.0155, 0.0155, 0.0155),
+        )
+        self.write_gt(gt, shape=(32, 32, 32))
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config(cache_enabled=True)
+
+        first = ImageCASDataset(
+            [pair],
+            config,
+            training=False,
+            image_replacements={
+                "rca_0001": {1: np.full((32, 32), 0.25, dtype=np.float32)}
+            },
+        )[0]
+        second = ImageCASDataset(
+            [pair],
+            config,
+            training=False,
+            image_replacements={
+                "rca_0001": {1: np.full((32, 32), 0.75, dtype=np.float32)}
+            },
+        )[0]
+
+        first_metadata = json.loads(first["metadata_json"])
+        second_metadata = json.loads(second["metadata_json"])
+        self.assertNotEqual(
+            first_metadata["selected_images_sha256"],
+            second_metadata["selected_images_sha256"],
+        )
+        self.assertTrue(torch.equal(first["input"], second["input"]))
+        self.assertEqual(len(list((self.root / "cache" / "rca").glob("*.npz"))), 2)
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
     def test_one_cpu_dataloader_batch(self) -> None:
         projection = self.root / "rca_0001.npz"
         gt = self.root / "gt" / "rca" / "1.npz"
@@ -293,6 +472,10 @@ class ImageCASDataTestCase(unittest.TestCase):
         self.assertEqual(tuple(batch["target"].shape), (1, 1, 32, 32, 32))
         self.assertEqual(float(batch["input"].max()), 2.0)
         self.assertEqual(int(torch.count_nonzero(batch["target"])), 1)
+        metadata = json.loads(batch["metadata_json"][0])
+        self.assertEqual(metadata["replaced_view_indices"], [])
+        self.assertEqual(metadata["replacement_images_sha256"], {})
+        self.assertEqual(len(metadata["selected_images_sha256"]), 64)
 
 
 if __name__ == "__main__":
