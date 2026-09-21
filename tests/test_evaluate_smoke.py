@@ -144,13 +144,31 @@ class EvaluationSmokeTestCase(unittest.TestCase):
             self.assertIn("dice", result)
             self.assertIn("cldice", result)
             self.assertGreaterEqual(result["inference_seconds"], 0.0)
+            self.assertGreaterEqual(result["backprojection_seconds"], 0.0)
             self.assertGreaterEqual(
-                result["elapsed_seconds"], result["inference_seconds"]
+                result["prediction_pipeline_seconds"],
+                result["inference_seconds"],
+            )
+            self.assertAlmostEqual(
+                result["reconstruction_seconds"],
+                result["backprojection_seconds"]
+                + result["prediction_pipeline_seconds"],
+            )
+            self.assertGreaterEqual(
+                result["elapsed_seconds"], result["reconstruction_seconds"]
             )
             self.assertFalse(failures["failures"])
             self.assertEqual(summary["summary"]["overall"]["n"], 1)
             self.assertEqual(
                 summary["summary"]["overall"]["inference_seconds"]["n"], 1
+            )
+            self.assertEqual(
+                summary["summary"]["overall"]["reconstruction_seconds"]["n"],
+                1,
+            )
+            self.assertEqual(
+                per_case["context"]["reconstruction_timing"]["field"],
+                "reconstruction_seconds",
             )
             self.assertEqual(
                 per_case["context"]["inference_timing"]["scope"],
@@ -164,6 +182,7 @@ class EvaluationSmokeTestCase(unittest.TestCase):
             self.assertIn("dice", csv_rows[0])
             self.assertIn("cldice", csv_rows[0])
             self.assertIn("inference_seconds", csv_rows[0])
+            self.assertIn("reconstruction_seconds", csv_rows[0])
             prediction_path = Path(result["prediction_path"])
             self.assertTrue(prediction_path.is_file())
 

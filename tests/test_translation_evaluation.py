@@ -264,6 +264,27 @@ class FixedTranslationEvaluationTestCase(unittest.TestCase):
                 all(float(row["inference_seconds"]) >= 0.0 for row in rows)
             )
             self.assertTrue(
+                all(float(row["backprojection_seconds"]) >= 0.0 for row in rows)
+            )
+            self.assertTrue(
+                all(
+                    float(row["prediction_pipeline_seconds"])
+                    >= float(row["inference_seconds"])
+                    for row in rows
+                )
+            )
+            self.assertTrue(
+                all(
+                    abs(
+                        float(row["reconstruction_seconds"])
+                        - float(row["backprojection_seconds"])
+                        - float(row["prediction_pipeline_seconds"])
+                    )
+                    < 1.0e-9
+                    for row in rows
+                )
+            )
+            self.assertTrue(
                 all(
                     float(row["elapsed_seconds"])
                     >= float(row["inference_seconds"])
@@ -272,6 +293,13 @@ class FixedTranslationEvaluationTestCase(unittest.TestCase):
             )
             self.assertEqual(
                 summary["summary"]["overall_inference_seconds"]["n"], 10
+            )
+            self.assertEqual(
+                summary["summary"]["overall_reconstruction_seconds"]["n"], 10
+            )
+            self.assertEqual(
+                payload["context"]["reconstruction_timing"]["field"],
+                "reconstruction_seconds",
             )
             self.assertEqual(
                 payload["context"]["inference_timing"]["scope"],

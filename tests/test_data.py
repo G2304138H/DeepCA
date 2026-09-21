@@ -278,6 +278,37 @@ class ImageCASDataTestCase(unittest.TestCase):
         self.assertEqual(len(list((self.root / "cache" / "rca").glob("*.npz"))), 2)
 
     @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_timed_backprojection_bypasses_cached_input(self) -> None:
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt" / "rca" / "1.npz"
+        self.write_projection(
+            projection,
+            image_size=32,
+            center_m=(0.0155, 0.0155, 0.0155),
+        )
+        self.write_gt(gt, shape=(32, 32, 32))
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config(cache_enabled=True)
+
+        ImageCASDataset([pair], config, training=False)[0]
+        with mock.patch(
+            "deepca.data.binary_cone_backproject",
+            wraps=binary_cone_backproject,
+        ) as backproject:
+            item = ImageCASDataset(
+                [pair],
+                config,
+                training=False,
+                measure_backprojection_time=True,
+            )[0]
+
+        metadata = json.loads(item["metadata_json"])
+        backproject.assert_called_once()
+        self.assertTrue(metadata["backprojection_timed"])
+        self.assertFalse(metadata["preprocessing_cache_used"])
+        self.assertGreaterEqual(metadata["backprojection_seconds"], 0.0)
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
     def test_image_replacement_uses_source_index_after_ordered_selection(self) -> None:
         projection = self.root / "rca_0001.npz"
         gt = self.root / "gt" / "rca" / "1.npz"

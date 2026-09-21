@@ -181,8 +181,20 @@ def _infer(
     dict[str, float],
     float,
     float,
+    float,
+    float,
+    float,
 ]:
     started = time.perf_counter()
+    metadata = json.loads(str(item["metadata_json"]))
+    backprojection_seconds = metadata.get("backprojection_seconds")
+    if backprojection_seconds is None:
+        raise RuntimeError(
+            "Fixed-translation evaluation requires a measured backprojection, "
+            "but the dataset returned no backprojection timing."
+        )
+    backprojection_seconds = float(backprojection_seconds)
+    prediction_pipeline_started = time.perf_counter()
     model_input = item["input"].unsqueeze(0).to(
         device=device, dtype=torch.float32
     )
@@ -191,6 +203,8 @@ def _infer(
     )
     raw_prediction = raw_output[0, 0].float().cpu().numpy()
     prediction = (raw_prediction >= threshold).astype(np.uint8)
+    prediction_pipeline_seconds = time.perf_counter() - prediction_pipeline_started
+    reconstruction_seconds = backprojection_seconds + prediction_pipeline_seconds
     target = item["target"][0].cpu().numpy().astype(np.uint8)
     grid = _grid_from_item(item, prediction.shape)
     metrics = {
@@ -206,6 +220,9 @@ def _infer(
         target,
         grid,
         metrics,
+        backprojection_seconds,
+        prediction_pipeline_seconds,
+        reconstruction_seconds,
         inference_seconds,
         time.perf_counter() - started,
     )
@@ -265,6 +282,9 @@ def _summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             },
             "refined_model_metrics": None,
             "refined_minus_coarse": None,
+            "reconstruction_seconds": _stats(
+                [float(row["reconstruction_seconds"]) for row in condition_rows]
+            ),
             "inference_seconds": _stats(
                 [float(row["inference_seconds"]) for row in condition_rows]
             ),
@@ -305,6 +325,9 @@ def _summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "case_count": len({str(row["case_id"]) for row in rows}),
         "condition_count": len(grouped),
         "result_count": len(rows),
+        "overall_reconstruction_seconds": _stats(
+            [float(row["reconstruction_seconds"]) for row in rows]
+        ),
         "overall_inference_seconds": _stats(
             [float(row["inference_seconds"]) for row in rows]
         ),
@@ -370,6 +393,9 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "dice_relative_change_percent",
         "cldice_relative_change_percent",
         "prediction_path",
+        "backprojection_seconds",
+        "prediction_pipeline_seconds",
+        "reconstruction_seconds",
         "inference_seconds",
         "elapsed_seconds",
     ]
@@ -616,7 +642,11 @@ def run_fixed_translation_evaluation(
             )
 
     control_dataset = ImageCASDataset(
-        pairs, runtime_config, training=False, num_views_override=2
+        pairs,
+        runtime_config,
+        training=False,
+        num_views_override=2,
+        measure_backprojection_time=True,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -688,6 +718,9 @@ def run_fixed_translation_evaluation(
                 target,
                 grid,
                 metrics,
+                backprojection_seconds,
+                prediction_pipeline_seconds,
+                reconstruction_seconds,
                 inference_seconds,
                 elapsed,
             ) = _infer(
@@ -797,6 +830,9 @@ def run_fixed_translation_evaluation(
                 "prediction_path": (
                     None if prediction_path is None else str(prediction_path)
                 ),
+                "backprojection_seconds": backprojection_seconds,
+                "prediction_pipeline_seconds": prediction_pipeline_seconds,
+                "reconstruction_seconds": reconstruction_seconds,
                 "inference_seconds": inference_seconds,
                 "elapsed_seconds": elapsed,
             }
@@ -825,6 +861,7 @@ def run_fixed_translation_evaluation(
                     training=False,
                     num_views_override=2,
                     image_replacements=replacements_by_condition[condition_id],
+                    measure_backprojection_time=True,
                 ),
             )
     except BaseException as error:
@@ -898,6 +935,36 @@ def run_fixed_translation_evaluation(
         ),
         "model_stage_note": MODEL_STAGE_NOTE,
         "metrics": ["dice", "cldice"],
+        "reconstruction_timing": {
+            "field": "reconstruction_seconds",
+            "unit": "seconds",
+            "scope": (
+                "2D projection thresholding/backprojection through final binary "
+                "3D prediction"
+            ),
+            "clock": "time.perf_counter",
+            "cuda_synchronized_generator": device.type == "cuda",
+            "components": [
+                "backprojection_seconds",
+                "prediction_pipeline_seconds",
+            ],
+            "includes": [
+                "2D projection thresholding and cone backprojection",
+                "host-to-device model-input transfer",
+                "generator forward pass",
+                "device-to-host model-output transfer",
+                "final 3D prediction thresholding",
+            ],
+            "excludes": [
+                "projection NPZ loading and view selection",
+                "translation-condition rendering",
+                "ground-truth loading and resampling",
+                "metric computation",
+                "prediction serialization",
+                "visualization",
+            ],
+            "preprocessing_cache_bypassed": True,
+        },
         "inference_timing": {
             "field": "inference_seconds",
             "unit": "seconds",

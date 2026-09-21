@@ -392,9 +392,12 @@ renamed bundle beneath `<output_dir>/<split>/runs/run-.../`; the CLI reports its
 `predictions/` tree. A failed or interrupted matrix is never promoted as a
 completed run. The bundle context records the resolved config fingerprint and
 whether `--allow-checkpoint-config-mismatch` authorized the checkpoint. Every
-case/condition records Dice, clDice, its broader elapsed time, and a separate
-CUDA-synchronized generator-only `inference_seconds`; summaries aggregate that
-inference time overall and by condition.
+case/condition records Dice and clDice, the requested end-to-end
+`reconstruction_seconds` from thresholding/backprojection through the final
+binary 3D volume, its two components (`backprojection_seconds` and
+`prediction_pipeline_seconds`), its broader elapsed time, and a separate
+CUDA-synchronized generator-only `inference_seconds`. Summaries aggregate both
+reconstruction and generator-only inference time overall and by condition.
 
 ## Missing upstream components and preserved quirks
 
@@ -552,12 +555,20 @@ spacing, and origin alignment, and writes per-case JSON/CSV, aggregate statistic
 view-count groups, optional binary NPZ predictions, and an explicit failure
 manifest beneath the configured `evaluation/test` directory. Both-empty
 Dice/clDice is 1; exactly-one-empty is 0. clDice uses scikit-image 0.22.0's
-deterministic Lee 3D skeletonization. Each case records Dice, clDice, its broader
-elapsed time, and CUDA-synchronized generator-only `inference_seconds`; the
-summary aggregates inference time overall and by cohort/view-count grouping.
-Input transfer, post-processing, metrics, and serialization are excluded from
-`inference_seconds`. To exercise evaluation on validation data without writing
-predicted volumes after a checkpoint exists:
+deterministic Lee 3D skeletonization. Each case records Dice and clDice plus
+three timing components. `backprojection_seconds` measures thresholding the
+already-loaded selected 2D projections and constructing the combined 3D cone
+support. `prediction_pipeline_seconds` measures host-to-device transfer,
+generator inference, device-to-host transfer, and final 3D thresholding.
+`reconstruction_seconds` is their sum and is the requested reconstruction
+latency from backprojection through the final binary 3D volume. Evaluation
+deliberately bypasses the preprocessing cache so this measurement always
+contains a real backprojection. Projection-file loading, view selection,
+ground-truth work, metrics, serialization, and visualization are excluded.
+The narrower CUDA-synchronized generator-only measurement remains available as
+`inference_seconds`. Summaries aggregate both reconstruction and inference time
+overall and by cohort/view-count grouping. To exercise evaluation on validation
+data without writing predicted volumes after a checkpoint exists:
 
 ```bash
 python evaluate.py --config configs/eval_imagecas_lca.yaml --split val \
@@ -569,7 +580,8 @@ python evaluate.py --config configs/eval_imagecas_rca.yaml --split val \
 ### Predicted-volume visualization
 
 Visualization is a separate post-processing step: it does not run the model,
-change the prediction, or contribute to Dice, clDice, or inference timing. The
+change the prediction, or contribute to Dice, clDice, reconstruction timing, or
+generator-only inference timing. The
 implementation follows the useful outputs of AutoCar's predicted-volume
 visualizer while using DeepCA's own saved-volume schema and physical-coordinate
 convention. In particular, DeepCA's saved `origin` is the physical centre of
