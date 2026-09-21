@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -602,6 +603,7 @@ class ImageCASDataset(Dataset):
         image_replacements: Optional[
             Mapping[str, Mapping[int, np.ndarray]]
         ] = None,
+        measure_backprojection_time: bool = False,
     ) -> None:
         if torch is None:
             raise ImportError("PyTorch is required to construct ImageCASDataset.")
@@ -610,6 +612,7 @@ class ImageCASDataset(Dataset):
         self.pairs = tuple(pairs)
         self.config = config
         self.training = bool(training)
+        self.measure_backprojection_time = bool(measure_backprojection_time)
         self.epoch = 0
         self.image_replacements = _normalise_image_replacements(
             image_replacements,
@@ -797,13 +800,16 @@ class ImageCASDataset(Dataset):
             json.dumps(cache_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         cache_path = self.cache_dir / pair.vessel_type / f"{pair.case_id}_{digest}.npz"
-        if self.cache_enabled and cache_path.is_file():
+        cache_hit = self.cache_enabled and cache_path.is_file()
+        if cache_hit and not self.measure_backprojection_time:
             with np.load(cache_path, allow_pickle=False) as cached:
                 input_volume = np.asarray(cached["input"], dtype=np.float32)
                 target_volume = np.asarray(cached["target"], dtype=np.float32)
             if input_volume.shape != grid.shape_zyx or target_volume.shape != grid.shape_zyx:
                 raise ValueError(f"Corrupt cache shape in {cache_path}.")
+            backprojection_seconds: Optional[float] = None
         else:
+            backprojection_started = time.perf_counter()
             input_volume = binary_cone_backproject(
                 selected,
                 projection.theta_deg[indices],
@@ -817,10 +823,11 @@ class ImageCASDataset(Dataset):
                 combine=self.combine,
                 chunk_depth=self.chunk_depth,
             )
+            backprojection_seconds = time.perf_counter() - backprojection_started
             target_volume = resample_binary_xyz_to_grid(
                 gt.volume_xyz, gt.spacing_xyz_mm, grid
             )
-            if self.cache_enabled:
+            if self.cache_enabled and not self.measure_backprojection_time:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = cache_path.with_name(
                     f".{cache_path.name}.{os.getpid()}.tmp.npz"
@@ -860,6 +867,11 @@ class ImageCASDataset(Dataset):
             "grid": grid.as_dict(),
             "source_axis_order": self.source_axis_order,
             "tensor_axis_order": "ZYX",
+            "backprojection_seconds": backprojection_seconds,
+            "backprojection_timed": backprojection_seconds is not None,
+            "preprocessing_cache_used": bool(
+                cache_hit and not self.measure_backprojection_time
+            ),
         }
         return input_volume, target_volume, metadata
 

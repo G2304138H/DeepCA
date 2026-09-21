@@ -84,6 +84,9 @@ python train.py --config configs/imagecas_rca.yaml
 python train.py --config configs/imagecas_lca.yaml
 python evaluate.py --config configs/eval_imagecas_rca.yaml --split test
 python evaluate.py --config configs/eval_imagecas_lca.yaml --split test
+python scripts/visualize_prediction.py \
+  --evaluation-dir /export/home2/reny0012/result/deepca_imagecas/lca/evaluation/test \
+  --case-id lca_0001 --num-views 2
 ```
 
 Run the fixed two-view translational calibration robustness evaluation with its

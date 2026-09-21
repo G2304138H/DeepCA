@@ -25,6 +25,7 @@ from deepca.data import (
     build_projection_index,
     resolve_case_pairs,
 )
+from deepca.inference import timed_inference
 from deepca.metrics import (
     PhysicalGrid,
     aggregate_statistics,
@@ -152,11 +153,23 @@ def _stats(values: Sequence[float]) -> dict[str, float | int]:
 
 def _aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     if not rows:
-        return {"n": 0, "dice": None, "cldice": None}
+        return {
+            "n": 0,
+            "dice": None,
+            "cldice": None,
+            "reconstruction_seconds": None,
+            "inference_seconds": None,
+        }
     return {
         "n": len(rows),
         "dice": _stats([float(row["dice"]) for row in rows]),
         "cldice": _stats([float(row["cldice"]) for row in rows]),
+        "reconstruction_seconds": _stats(
+            [float(row["reconstruction_seconds"]) for row in rows]
+        ),
+        "inference_seconds": _stats(
+            [float(row["inference_seconds"]) for row in rows]
+        ),
     }
 
 
@@ -202,6 +215,10 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "grid_spacing_xyz_mm",
         "grid_origin_xyz_mm",
         "prediction_path",
+        "backprojection_seconds",
+        "prediction_pipeline_seconds",
+        "reconstruction_seconds",
+        "inference_seconds",
         "elapsed_seconds",
     ]
     with path.open("w", encoding="utf-8", newline="") as stream:
@@ -560,7 +577,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             break
         try:
             dataset = ImageCASDataset(
-                pairs, config, training=False, num_views_override=num_views
+                pairs,
+                config,
+                training=False,
+                num_views_override=num_views,
+                measure_backprojection_time=True,
             )
         except Exception as error:
             failures.extend(
@@ -579,12 +600,29 @@ def main(argv: Optional[list[str]] = None) -> int:
             started = time.perf_counter()
             try:
                 item = dataset[index]
+                metadata = json.loads(item["metadata_json"])
+                backprojection_seconds = metadata.get("backprojection_seconds")
+                if backprojection_seconds is None:
+                    raise RuntimeError(
+                        "Evaluation requires a measured backprojection, but the "
+                        "dataset returned no backprojection timing."
+                    )
+                backprojection_seconds = float(backprojection_seconds)
+                prediction_pipeline_started = time.perf_counter()
                 condition = item["input"].unsqueeze(0).to(
                     device=device, dtype=torch.float32
                 )
-                with torch.inference_mode():
-                    raw_prediction = generator(condition)[0, 0].float().cpu().numpy()
+                raw_output, inference_seconds = timed_inference(
+                    generator, condition, device=device
+                )
+                raw_prediction = raw_output[0, 0].float().cpu().numpy()
                 prediction = (raw_prediction >= threshold).astype(np.uint8)
+                prediction_pipeline_seconds = (
+                    time.perf_counter() - prediction_pipeline_started
+                )
+                reconstruction_seconds = (
+                    backprojection_seconds + prediction_pipeline_seconds
+                )
                 target = item["target"][0].cpu().numpy().astype(np.uint8)
                 grid = _grid_from_item(item, prediction.shape)
                 dice = binary_dice(
@@ -599,7 +637,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                     prediction_grid=grid,
                     target_grid=grid,
                 )
-                metadata = json.loads(item["metadata_json"])
                 prediction_path: Optional[Path] = None
                 if save_predictions:
                     prediction_path = (
@@ -643,6 +680,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                         "prediction_path": (
                             None if prediction_path is None else str(prediction_path)
                         ),
+                        "backprojection_seconds": backprojection_seconds,
+                        "prediction_pipeline_seconds": prediction_pipeline_seconds,
+                        "reconstruction_seconds": reconstruction_seconds,
+                        "inference_seconds": inference_seconds,
                         "elapsed_seconds": time.perf_counter() - started,
                     }
                 )
@@ -682,6 +723,50 @@ def main(argv: Optional[list[str]] = None) -> int:
         "skeletonization": skeletonization,
         "prediction_semantics": "raw generator output >= threshold",
         "metric_grid": "per-case model grid; GT resampled nearest-neighbour before inference",
+        "metrics": ["dice", "cldice"],
+        "reconstruction_timing": {
+            "field": "reconstruction_seconds",
+            "unit": "seconds",
+            "scope": (
+                "2D projection thresholding/backprojection through final binary "
+                "3D prediction"
+            ),
+            "clock": "time.perf_counter",
+            "cuda_synchronized_generator": device.type == "cuda",
+            "components": [
+                "backprojection_seconds",
+                "prediction_pipeline_seconds",
+            ],
+            "includes": [
+                "2D projection thresholding and cone backprojection",
+                "host-to-device model-input transfer",
+                "generator forward pass",
+                "device-to-host model-output transfer",
+                "final 3D prediction thresholding",
+            ],
+            "excludes": [
+                "projection NPZ loading and view selection",
+                "ground-truth loading and resampling",
+                "metric computation",
+                "prediction serialization",
+                "visualization",
+            ],
+            "preprocessing_cache_bypassed": True,
+        },
+        "inference_timing": {
+            "field": "inference_seconds",
+            "unit": "seconds",
+            "scope": "generator forward pass only",
+            "clock": "time.perf_counter",
+            "cuda_synchronized": device.type == "cuda",
+            "excludes": [
+                "data loading and preprocessing",
+                "host-to-device input transfer",
+                "device-to-host output transfer",
+                "thresholding and metric computation",
+                "prediction serialization",
+            ],
+        },
         "successful_results": len(rows),
         "failed_results": len(failures),
         "checkpoint_config_mismatch_override": bool(
