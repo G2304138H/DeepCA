@@ -128,8 +128,8 @@ def _parse_view_counts(value: object) -> list[int]:
     else:
         raise TypeError("view_counts must be a list or comma-separated string.")
     counts = [int(item) for item in raw]
-    if not counts or any(item <= 0 for item in counts) or len(set(counts)) != len(counts):
-        raise ValueError("view_counts must contain unique positive integers.")
+    if not counts or any(not 1 <= item <= 7 for item in counts) or len(set(counts)) != len(counts):
+        raise ValueError("view_counts must contain unique integers in 1..7.")
     return counts
 
 

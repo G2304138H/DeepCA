@@ -30,6 +30,9 @@ except ImportError:
     torch = None
     DataLoader = None
 
+if torch is not None:
+    from train import _training_drop_last
+
 
 class ImageCASDataTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -234,6 +237,147 @@ class ImageCASDataTestCase(unittest.TestCase):
         )
         self.assertEqual(result.shape, (5, 5, 5))
         self.assertEqual(result[2, 2, 2], 1.0)
+
+    def test_stacked_backprojection_matches_legacy_sum_for_one_to_seven(self) -> None:
+        grid = make_cubic_grid(5, 5.0, (0.0, 0.0, 0.0))
+        for count in range(1, 8):
+            with self.subTest(count=count):
+                images = np.zeros((count, 5, 5), dtype=np.float32)
+                images[:, 2, 2] = 1.0
+                kwargs = dict(
+                    grid=grid, sid_m=0.9, source_to_isocentre_m=0.75,
+                    detector_pixel_spacing_mm=1.0,
+                )
+                angles = np.zeros(count, dtype=np.float32)
+                stack = binary_cone_backproject(
+                    images, angles, np.full(count, 90.0), combine="stack", **kwargs
+                )
+                summed = binary_cone_backproject(
+                    images, angles, np.full(count, 90.0), combine="sum", **kwargs
+                )
+                self.assertEqual(stack.shape, (count, 5, 5, 5))
+                np.testing.assert_array_equal(stack.sum(axis=0), summed)
+                self.assertEqual(float(stack[:, 2, 2, 2].sum()), float(count))
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_variable_training_counts_keep_batch_shape_fixed(self) -> None:
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt" / "rca" / "1.npz"
+        self.write_projection(
+            projection, image_size=32, views=7,
+            center_m=(0.0155, 0.0155, 0.0155),
+        )
+        self.write_gt(gt, shape=(32, 32, 32))
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config()
+        config["data"]["views"]["train_counts"] = list(range(1, 8))  # type: ignore[index]
+        config["data"]["preprocessing"]["combine"] = "stack"  # type: ignore[index]
+        config["model"] = {"generator": {"view_fusion": "mean_count", "max_views": 7}}
+        dataset = ImageCASDataset([pair], config, training=True)
+        observed = set()
+        for epoch in range(7):
+            dataset.set_epoch(epoch)
+            item = dataset[0]
+            count = item["num_views"]
+            observed.add(count)
+            self.assertEqual(tuple(item["input"].shape), (8, 32, 32, 32))
+            self.assertEqual(int(torch.count_nonzero(item["input"][count:7])), 0)
+            self.assertAlmostEqual(float(item["input"][7, 0, 0, 0]), count / 7)
+            self.assertEqual(item["view_indices"].shape[0], 7)
+        self.assertEqual(observed, set(range(1, 8)))
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_random_view_range_samples_each_case_and_keeps_partial_batch(self) -> None:
+        pairs = []
+        available = {}
+        for number, count in ((1, 7), (2, 3), (3, 1)):
+            case_id = f"rca_{number:04d}"
+            projection = self.root / f"{case_id}.npz"
+            gt = self.root / "gt" / "rca" / f"{number}.npz"
+            self.write_projection(
+                projection, number=number, image_size=32, views=count,
+                center_m=(0.0155, 0.0155, 0.0155),
+            )
+            self.write_gt(gt, shape=(32, 32, 32))
+            pairs.append(CasePair(case_id, "rca", number, projection.resolve(), gt.resolve()))
+            available[case_id] = count
+        config = self.dataset_config()
+        config["data"]["views"].update(  # type: ignore[index]
+            {"count": 1, "min_input_views": 1, "max_input_views": 7}
+        )
+        config["data"]["preprocessing"]["combine"] = "stack"  # type: ignore[index]
+        config["model"] = {"generator": {"view_fusion": "mean_count", "max_views": 7}}
+        dataset = ImageCASDataset(pairs, config, training=True)
+        self.assertEqual(dataset.view_strategy, "random")
+        self.assertFalse(_training_drop_last(dataset, {"drop_last": True}))
+
+        signatures: dict[str, set[tuple[int, tuple[int, ...]]]] = {}
+        for epoch in range(10):
+            dataset.set_epoch(epoch)
+            visited = []
+            loader = DataLoader(
+                dataset, batch_size=2, shuffle=False,
+                drop_last=_training_drop_last(dataset, {"drop_last": True}),
+                num_workers=0,
+            )
+            for batch in loader:
+                for row, case_id in enumerate(batch["case_id"]):
+                    count = int(batch["num_views"][row])
+                    indices = tuple(
+                        int(value) for value in batch["view_indices"][row]
+                        if int(value) >= 0
+                    )
+                    self.assertTrue(1 <= count <= available[case_id])
+                    self.assertEqual(len(indices), count)
+                    self.assertEqual(len(set(indices)), count)
+                    self.assertTrue(all(0 <= value < available[case_id] for value in indices))
+                    visited.append(case_id)
+                    signatures.setdefault(case_id, set()).add((count, indices))
+            self.assertEqual(visited, [pair.case_id for pair in pairs])
+            if epoch == 0:
+                repeated = dataset[0]
+                self.assertEqual(
+                    tuple(int(value) for value in repeated["view_indices"] if value >= 0),
+                    next(iter(signatures[pairs[0].case_id]))[1],
+                )
+        self.assertGreater(len(signatures[pairs[0].case_id]), 1)
+        self.assertEqual({count for count, _ in signatures[pairs[2].case_id]}, {1})
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_random_view_range_rejects_invalid_bounds(self) -> None:
+        pair = CasePair(
+            "rca_0001", "rca", 1,
+            (self.root / "rca_0001.npz").resolve(),
+            (self.root / "1.npz").resolve(),
+        )
+        for minimum, maximum in ((0, 7), (1, 8), (5, 4), (True, 7)):
+            with self.subTest(minimum=minimum, maximum=maximum):
+                config = self.dataset_config()
+                config["data"]["views"].update(  # type: ignore[index]
+                    {"min_input_views": minimum, "max_input_views": maximum}
+                )
+                with self.assertRaisesRegex(ValueError, "input view range"):
+                    ImageCASDataset([pair], config, training=True)
+
+    @unittest.skipIf(torch is None, "PyTorch is not installed")
+    def test_single_view_archive_keeps_voxel_support(self) -> None:
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt" / "rca" / "1.npz"
+        self.write_projection(
+            projection, image_size=32, views=1,
+            center_m=(0.0155, 0.0155, 0.0155),
+        )
+        self.write_gt(gt, shape=(32, 32, 32))
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config()
+        config["data"]["views"]["count"] = 1  # type: ignore[index]
+        config["data"]["preprocessing"]["combine"] = "stack"  # type: ignore[index]
+        config["model"] = {"generator": {"view_fusion": "mean_count", "max_views": 7}}
+        item = ImageCASDataset([pair], config, training=False)[0]
+        self.assertEqual(item["num_views"], 1)
+        self.assertEqual(tuple(item["input"].shape), (8, 32, 32, 32))
+        self.assertGreater(int(torch.count_nonzero(item["input"][0])), 0)
+        self.assertEqual(int(torch.count_nonzero(item["input"][1:7])), 0)
 
     @unittest.skipIf(torch is None, "PyTorch is not installed")
     def test_unsupported_configured_source_axis_order_is_rejected(self) -> None:

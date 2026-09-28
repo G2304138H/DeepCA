@@ -215,6 +215,45 @@ changes the input range to `{0,...,V}` and is a scientific deviation. `mean` and
 `union` aggregation are also explicit deviations and must not be mixed within an
 experiment. Selected view indices and calibration are recorded per case.
 
+### One to seven view model
+
+The variable-view configuration is a separate training experiment. Use
+`configs/imagecas_rca_variable_views.yaml` or
+`configs/imagecas_lca_variable_views.yaml` for training, and the matching
+`eval_imagecas_*_variable_views.yaml` for evaluation. These configurations set
+`data.preprocessing.combine: stack`, `model.generator.view_fusion: mean_count`,
+`data.views.min_input_views: 1`, and `data.views.max_input_views: 7`.
+
+Backprojection creates one binary 3D cone-support volume per selected image.
+The data loader places these in seven ordered slots, zero pads unused slots,
+and adds a constant count channel. Inside the generator, the supports are
+averaged over the active views; the normalized count is the second input
+channel. The critic receives those same two conditioning channels plus the
+target or predicted volume. A one-view input is therefore a 3D cone-support
+field. It is geometrically underdetermined, so the predicted vessel tree relies
+more heavily on the learned prior and should be assessed separately.
+
+Each epoch visits every training case once. For each case, the trainer samples
+an integer view count uniformly from the configured range, capped by that
+case's available projections, then samples that many distinct views. The seed,
+epoch, and case ID make the choice reproducible within an epoch while allowing
+different cases and epochs to use different views. A case with fewer projections
+than `min_input_views` fails with a clear error. Batches retain the same tensor
+shape for all counts, and the final partial batch is included. The example
+configurations update the generator after every batch. Validation uses
+`data.views.count` (one in the example configurations, so every nonempty case is
+eligible). At evaluation, `view_counts` requests
+specific counts, and a request beyond a case's available images is recorded as
+a case failure. The variable-view generator has a two-channel first convolution
+and needs a newly trained checkpoint; released two-view weights cannot load
+strictly into it. The original summed-input configurations remain available for
+the released architecture and checkpoints.
+
+```bash
+python train.py --config configs/imagecas_rca_variable_views.yaml
+python evaluate.py --config configs/eval_imagecas_rca_variable_views.yaml --split test
+```
+
 ## Fixed two-view translational calibration robustness evaluation
 
 `evaluation.mode: fixed_two_view_translation` is a **fixed two-view

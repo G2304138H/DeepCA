@@ -196,7 +196,8 @@ def binary_cone_backproject(
 
     Each per-view support is thresholded after backprojection, matching the
     paper's one-iteration-SIRT -> ``>0`` representation. The default sum keeps
-    the released two-view input range {0,1,2}.
+    the released two-view input range {0,1,2}. ``stack`` preserves one volume
+    per view in input order for variable-view model fusion.
     """
 
     projections = np.asarray(images, dtype=np.float32)
@@ -214,8 +215,8 @@ def binary_cone_backproject(
     threshold = float(projection_threshold)
     if not np.isfinite(threshold):
         raise ValueError("projection_threshold must be finite.")
-    if combine not in {"sum", "mean", "union"}:
-        raise ValueError("combine must be 'sum', 'mean', or 'union'.")
+    if combine not in {"sum", "mean", "union", "stack"}:
+        raise ValueError("combine must be 'sum', 'mean', 'union', or 'stack'.")
     if int(chunk_depth) <= 0:
         raise ValueError("chunk_depth must be positive.")
 
@@ -230,7 +231,11 @@ def binary_cone_backproject(
     local_x = (np.arange(width, dtype=np.float64) - (width - 1) / 2.0) * spacing_xyz_m[0]
     local_y = (np.arange(height, dtype=np.float64) - (height - 1) / 2.0) * spacing_xyz_m[1]
     local_z = (np.arange(depth, dtype=np.float64) - (depth - 1) / 2.0) * spacing_xyz_m[2]
-    output = np.zeros((depth, height, width), dtype=np.float32)
+    output = np.zeros(
+        (projections.shape[0], depth, height, width)
+        if combine == "stack" else (depth, height, width),
+        dtype=np.float32,
+    )
     detector_height, detector_width = projections.shape[1:]
 
     binary_images = projections > threshold
@@ -262,12 +267,19 @@ def binary_cone_backproject(
                 interpolation=interpolation,
             )
             values[~valid] = 0.0
-            accumulated += values > 0.0
+            support = (values > 0.0).astype(np.float32)
+            if combine == "stack":
+                output[view_index, start:stop] = support.reshape(
+                    stop - start, height, width
+                )
+            else:
+                accumulated += support
         if combine == "mean":
             accumulated /= projections.shape[0]
         elif combine == "union":
             accumulated = (accumulated > 0.0).astype(np.float32)
-        output[start:stop] = accumulated.reshape(stop - start, height, width)
+        if combine != "stack":
+            output[start:stop] = accumulated.reshape(stop - start, height, width)
     return output
 
 def resample_binary_xyz_to_grid(

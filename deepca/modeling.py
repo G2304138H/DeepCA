@@ -106,7 +106,10 @@ def build_generator(
     model, generator_config, _ = _model_sections(config)
     volume_size = _configured_volume_size(config, model, generator_config)
     generator = Generator(
-        in_channels=_integer(generator_config, "in_channels", "input_channels", 1),
+        in_channels=_integer(
+            generator_config, "in_channels", "input_channels",
+            2 if generator_config.get("view_fusion", "none") == "mean_count" else 1,
+        ),
         num_filters=_integer(generator_config, "base_filters", "num_filters", 64),
         class_num=_integer(
             generator_config, "output_channels", "class_num", 1
@@ -114,6 +117,8 @@ def build_generator(
         batch_norm=_boolean(generator_config, "batch_norm", True),
         sample=_boolean(generator_config, "sample", False),
         volume_size=volume_size,
+        view_fusion=str(generator_config.get("view_fusion", "none")),
+        max_views=int(generator_config.get("max_views", 7)),
     )
     if device is not None:
         generator = generator.to(torch.device(device))
@@ -142,7 +147,17 @@ def build_models(
 ) -> tuple[Generator, Discriminator]:
     """Build the generator and conditional critic on ``device``."""
 
-    return build_generator(config, device), build_discriminator(config, device)
+    generator = build_generator(config, device)
+    discriminator = build_discriminator(config, device)
+    expected_critic_channels = generator.down1.conv_block.conv_block[0].in_channels + 1
+    actual_critic_channels = discriminator.pre_module[0].in_channels
+    if actual_critic_channels != expected_critic_channels:
+        raise ValueError(
+            "Critic input channels must equal fused generator condition channels "
+            f"plus one target channel: expected {expected_critic_channels}, "
+            f"got {actual_critic_channels}."
+        )
+    return generator, discriminator
 
 
 def architecture_metadata(
@@ -172,6 +187,9 @@ def architecture_metadata(
         "volume_size_multiple": 16,
         "released_default_volume_size": 128,
     }
+    if generator.view_fusion != "none":
+        metadata["view_fusion"] = generator.view_fusion
+        metadata["max_views"] = generator.max_views
     if discriminator is not None:
         critic_input = discriminator.pre_module[0]
         metadata.update(

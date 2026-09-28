@@ -52,7 +52,7 @@ class Up(nn.Module):
 
 class Generator(nn.Module):
     def __init__(self, in_channels=1, num_filters=64, class_num=1, batch_norm=True,
-                 sample=False, volume_size=128):
+                 sample=False, volume_size=128, view_fusion='none', max_views=7):
         super(Generator, self).__init__()
 
         if not isinstance(volume_size, int) or isinstance(volume_size, bool):
@@ -63,6 +63,15 @@ class Generator(nn.Module):
                 f"got {volume_size}."
             )
         self.volume_size = volume_size
+        if view_fusion not in {'none', 'mean_count'}:
+            raise ValueError("view_fusion must be 'none' or 'mean_count'.")
+        if view_fusion == 'mean_count' and in_channels != 2:
+            raise ValueError('mean_count view fusion requires in_channels=2.')
+        if not isinstance(max_views, int) or isinstance(max_views, bool) or max_views < 1:
+            raise ValueError('max_views must be a positive integer.')
+        self.view_fusion = view_fusion
+        self.max_views = max_views
+        self.in_channels = in_channels
         latent_size = volume_size // 16
 
         self.down1 = Down(in_channels, num_filters, batch_norm)
@@ -83,6 +92,25 @@ class Generator(nn.Module):
 
         self.conv_class = nn.Conv3d(num_filters * 1, class_num, 1, stride=1, padding='same')
 
+    def fuse_views(self, x):
+        if self.view_fusion == 'none':
+            if x.shape[1] != self.in_channels:
+                raise ValueError(
+                    f'Generator expects {self.in_channels} input channels, got {x.shape[1]}.'
+                )
+            return x
+        if x.shape[1] != self.max_views + 1:
+            raise ValueError(
+                f'Generator expects {self.max_views} view slots and one count channel, '
+                f'got {x.shape[1]} channels.'
+            )
+        count_fraction = x[:, self.max_views:self.max_views + 1]
+        count = count_fraction[:, :, :1, :1, :1] * self.max_views
+        if bool(((count < 1) | (count > self.max_views)).any()):
+            raise ValueError('View count must be between 1 and max_views.')
+        mean_support = x[:, :self.max_views].sum(dim=1, keepdim=True) / count
+        return cat((mean_support, count_fraction), dim=1)
+
     def forward(self, x):
         expected_shape = (self.volume_size, self.volume_size, self.volume_size)
         if x.ndim != 5 or tuple(x.shape[2:]) != expected_shape:
@@ -90,6 +118,7 @@ class Generator(nn.Module):
                 "Generator expects a 5D NCDHW tensor with cubic spatial shape "
                 f"{expected_shape}, got {tuple(x.shape)}."
             )
+        x = self.fuse_views(x)
         conv1, x = self.down1(x)
         conv2, x = self.down2(x)
         conv3, x = self.down3(x)

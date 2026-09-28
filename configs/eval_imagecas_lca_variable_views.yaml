@@ -1,0 +1,4 @@
+extends: imagecas_lca_variable_views.yaml
+
+evaluation:
+  checkpoint: /export/home2/reny0012/result/deepca_imagecas/lca_variable_views/checkpoints/best.pt
