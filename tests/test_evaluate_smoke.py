@@ -208,6 +208,40 @@ class EvaluationSmokeTestCase(unittest.TestCase):
                 "contract differs", mismatch_failures["failures"][0]["reason"]
             )
 
+            variable = copy.deepcopy(config)
+            variable["data"]["preprocessing"]["combine"] = "stack"
+            variable["data"]["views"]["min_input_views"] = 1
+            variable["data"]["views"]["max_input_views"] = 7
+            variable["model"]["generator"].update(
+                {"in_channels": 2, "view_fusion": "mean_count", "max_views": 7}
+            )
+            variable["model"]["critic"]["channels"] = 3
+            variable["evaluation"]["view_counts"] = [1, 2]
+            variable["evaluation"]["output_dir"] = str(root / "variable_evaluation")
+            variable_checkpoint = root / "variable_checkpoint.pt"
+            variable["evaluation"]["checkpoint"] = str(variable_checkpoint)
+            variable_generator = build_generator(variable, "cpu")
+            torch.save(
+                {
+                    "schema_version": 2,
+                    "generator": variable_generator.state_dict(),
+                    "architecture": architecture_metadata(variable_generator),
+                    "config": variable,
+                    "resolved_splits": load_resolved_splits(split_path, "rca").as_manifest(),
+                },
+                variable_checkpoint,
+            )
+            variable_config_path = root / "variable.yaml"
+            variable_config_path.write_text(yaml.safe_dump(variable), encoding="utf-8")
+            self.assertEqual(
+                evaluate.main(["--config", str(variable_config_path), "--split", "test"]),
+                0,
+            )
+            variable_rows = json.loads(
+                (root / "variable_evaluation" / "test" / "per_case.json").read_text()
+            )["results"]
+            self.assertEqual({row["num_views"] for row in variable_rows}, {1, 2})
+
 
 if __name__ == "__main__":
     unittest.main()

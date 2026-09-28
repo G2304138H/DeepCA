@@ -1,0 +1,32 @@
+extends: imagecas_rca.yaml
+
+experiment:
+  name: deepca_imagecas_rca_variable_views
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca_variable_views
+
+data:
+  views:
+    count: 1
+    min_input_views: 1
+    max_input_views: 7
+    train_selection: random
+  preprocessing:
+    combine: stack
+  cache:
+    directory: /export/home2/reny0012/result/deepca_imagecas/cache/rca_variable_views
+
+model:
+  generator:
+    in_channels: 2
+    view_fusion: mean_count
+    max_views: 7
+  critic:
+    channels: 3
+
+training:
+  drop_last: false
+  critic_steps_per_generator: 1
+
+evaluation:
+  view_counts: [1, 2, 3, 4, 5, 6, 7]
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca_variable_views/evaluation

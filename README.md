@@ -79,6 +79,13 @@ input schema, geometry conventions, Linux/CUDA environment setup, configuration
 fields, commands, validation checks, and documented deviations from the paper
 and released preprocessing code.
 
+For a model trained across one to seven views, use
+`configs/imagecas_rca_variable_views.yaml` or
+`configs/imagecas_lca_variable_views.yaml`. The matching evaluation configs
+run a view-count sweep with the new checkpoint. See the guide's
+[one to seven view model](docs/IMAGECAS_ADAPTATION.md#one-to-seven-view-model)
+section for its input representation and checkpoint compatibility.
+
 ```bash
 python train.py --config configs/imagecas_rca.yaml
 python train.py --config configs/imagecas_lca.yaml

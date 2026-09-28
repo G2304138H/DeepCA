@@ -634,9 +634,59 @@ class ImageCASDataset(Dataset):
         self.num_views = int(
             views["count"] if num_views_override is None else num_views_override
         )
+        if not 1 <= self.num_views <= 7:
+            raise ValueError("data.views.count must be between 1 and 7.")
+        range_keys = ("min_input_views", "max_input_views")
+        has_view_range = any(key in views for key in range_keys)
+        configured_counts = views.get("train_counts") if training else None
+        if training and has_view_range:
+            if not all(key in views for key in range_keys):
+                raise ValueError(
+                    "data.views.min_input_views and max_input_views must be set together."
+                )
+            if configured_counts is not None:
+                raise ValueError(
+                    "Use either min_input_views/max_input_views or train_counts, not both."
+                )
+            minimum, maximum = (views[key] for key in range_keys)
+            if (
+                any(isinstance(value, bool) or not isinstance(value, int)
+                    for value in (minimum, maximum))
+                or not 1 <= minimum <= maximum <= 7
+            ):
+                raise ValueError(
+                    "data.views input view range must satisfy "
+                    "1 <= min_input_views <= max_input_views <= 7."
+                )
+            if views.get("indices") is not None:
+                raise ValueError(
+                    "Explicit view indices cannot be used with a random input view range."
+                )
+            self.train_view_range = (minimum, maximum)
+        else:
+            self.train_view_range = None
+        if configured_counts is not None:
+            if (
+                not isinstance(configured_counts, (list, tuple))
+                or not configured_counts
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    or not 1 <= value <= 7
+                    for value in configured_counts
+                )
+                or len(set(configured_counts)) != len(configured_counts)
+            ):
+                raise ValueError("data.views.train_counts must contain unique counts in 1..7.")
+            if views.get("indices") is not None and len(configured_counts) > 1:
+                raise ValueError("Explicit view indices cannot be used with variable train_counts.")
+            self.train_counts = tuple(configured_counts)
+        else:
+            self.train_counts = None
         self.view_strategy = str(
             views.get("train_selection" if training else "eval_selection", views.get("selection", "first"))
         )
+        if self.train_view_range is not None:
+            self.view_strategy = "random"
         self.explicit_view_indices = views.get("indices")
         self.seed = int(config.get("experiment", {}).get("seed", 1))
         self.volume_size = int(preprocessing.get("volume_size", 128))
@@ -647,6 +697,31 @@ class ImageCASDataset(Dataset):
             preprocessing.get("backprojection_interpolation", "nearest")
         )
         self.combine = str(preprocessing.get("combine", "sum"))
+        model_config = config.get("model", {})
+        generator_config = model_config.get("generator", model_config)
+        self.view_fusion = str(generator_config.get("view_fusion", "none"))
+        self.max_views = int(generator_config.get("max_views", 7))
+        if self.view_fusion == "mean_count":
+            if self.combine != "stack" or not 1 <= self.max_views <= 7:
+                raise ValueError(
+                    "mean_count view fusion requires preprocessing.combine='stack' "
+                    "and model.generator.max_views in 1..7."
+                )
+            if (
+                self.num_views > self.max_views
+                or (self.train_counts and max(self.train_counts) > self.max_views)
+                or (
+                    self.train_view_range is not None
+                    and self.train_view_range[1] > self.max_views
+                )
+            ):
+                raise ValueError("Requested view count exceeds model.generator.max_views.")
+        elif self.view_fusion != "none" or self.combine == "stack":
+            raise ValueError("Stacked backprojections require mean_count view fusion.")
+        if (
+            self.train_counts is not None or self.train_view_range is not None
+        ) and self.view_fusion != "mean_count":
+            raise ValueError("Variable training views require mean_count view fusion.")
         self.chunk_depth = int(preprocessing.get("chunk_depth", 8))
         self.cache_enabled = bool(cache.get("enabled", True))
         self.cache_dir = Path(
@@ -692,9 +767,35 @@ class ImageCASDataset(Dataset):
             spacing_key=str(target_config.get("spacing_key", "spacing")),
             max_voxels=int(target_config.get("max_voxels", 200_000_000)),
         )
+        selected_num_views = self.num_views
+        if self.train_counts:
+            feasible = tuple(
+                count for count in self.train_counts if count <= projection.num_views
+            )
+            if not feasible:
+                raise ValueError(
+                    f"{pair.case_id} has {projection.num_views} views, fewer than "
+                    f"the configured train_counts {self.train_counts}."
+                )
+            digest = hashlib.sha256(f"{self.seed}:{pair.case_id}".encode()).digest()
+            offset = int.from_bytes(digest[:8], "little") % len(feasible)
+            selected_num_views = feasible[(offset + self.epoch) % len(feasible)]
+        elif self.train_view_range is not None:
+            minimum, maximum = self.train_view_range
+            feasible_maximum = min(maximum, projection.num_views)
+            if feasible_maximum < minimum:
+                raise ValueError(
+                    f"{pair.case_id} has {projection.num_views} views, fewer than "
+                    f"min_input_views={minimum}."
+                )
+            digest = hashlib.sha256(
+                f"{self.seed}:{self.epoch}:{pair.case_id}:view_count".encode()
+            ).digest()
+            rng = np.random.default_rng(int.from_bytes(digest[:8], "little"))
+            selected_num_views = int(rng.integers(minimum, feasible_maximum + 1))
         indices = select_view_indices(
             projection.num_views,
-            self.num_views,
+            selected_num_views,
             strategy=self.view_strategy,
             explicit_indices=self.explicit_view_indices,
             seed=self.seed,
@@ -763,7 +864,7 @@ class ImageCASDataset(Dataset):
         grid = make_cubic_grid(self.volume_size, fov_mm, center_mm)
 
         cache_payload = {
-            "schema_version": 3,
+            "schema_version": 4 if self.view_fusion == "mean_count" else 3,
             "algorithm": "stage2_binary_cone_support_backprojection_v1",
             "projection": _file_signature(pair.projection_path),
             "ground_truth": _file_signature(pair.ground_truth_path),
@@ -805,7 +906,11 @@ class ImageCASDataset(Dataset):
             with np.load(cache_path, allow_pickle=False) as cached:
                 input_volume = np.asarray(cached["input"], dtype=np.float32)
                 target_volume = np.asarray(cached["target"], dtype=np.float32)
-            if input_volume.shape != grid.shape_zyx or target_volume.shape != grid.shape_zyx:
+            expected_input_shape = (
+                (selected_num_views,) + grid.shape_zyx
+                if self.view_fusion == "mean_count" else grid.shape_zyx
+            )
+            if input_volume.shape != expected_input_shape or target_volume.shape != grid.shape_zyx:
                 raise ValueError(f"Corrupt cache shape in {cache_path}.")
             backprojection_seconds: Optional[float] = None
         else:
@@ -852,6 +957,7 @@ class ImageCASDataset(Dataset):
             "projection_path": str(pair.projection_path),
             "ground_truth_path": str(pair.ground_truth_path),
             "view_indices": indices.tolist(),
+            "num_views": selected_num_views,
             "replaced_view_indices": replaced_view_indices,
             "selected_images_sha256": selected_images_sha256,
             "replacement_images_sha256": replacement_sha256_by_view,
@@ -877,13 +983,25 @@ class ImageCASDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         input_volume, target_volume, metadata = self._load_case(self.pairs[index])
+        if self.view_fusion == "mean_count":
+            model_input = np.zeros(
+                (self.max_views + 1,) + input_volume.shape[1:], dtype=np.float32
+            )
+            model_input[:metadata["num_views"]] = input_volume
+            model_input[self.max_views] = metadata["num_views"] / self.max_views
+            view_indices = metadata["view_indices"] + [-1] * (
+                self.max_views - metadata["num_views"]
+            )
+        else:
+            model_input = input_volume[None]
+            view_indices = metadata["view_indices"]
         return {
-            "input": torch.from_numpy(input_volume[None].copy()),
+            "input": torch.from_numpy(model_input.copy()),
             "target": torch.from_numpy(target_volume[None].copy()),
             "case_id": metadata["case_id"],
             "vessel_type": metadata["vessel_type"],
-            "num_views": self.num_views,
-            "view_indices": torch.as_tensor(metadata["view_indices"], dtype=torch.int64),
+            "num_views": metadata["num_views"],
+            "view_indices": torch.as_tensor(view_indices, dtype=torch.int64),
             "grid_spacing_xyz_mm": torch.as_tensor(
                 metadata["grid"]["spacing_xyz_mm"], dtype=torch.float64
             ),

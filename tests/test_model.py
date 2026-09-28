@@ -9,7 +9,9 @@ except ImportError:  # pragma: no cover - exercised on dependency-light machines
     torch = None
 
 if torch is not None:
-    from deepca.engine import autocast_context, make_grad_scaler
+    from deepca.engine import (
+        autocast_context, conditional_pair, make_grad_scaler, train_one_epoch,
+    )
     from deepca.inference import timed_inference
     from deepca.modeling import (
         architecture_metadata,
@@ -31,6 +33,63 @@ class ReleasedModelTestCase(unittest.TestCase):
         self.assertEqual(tuple(output.shape), (1, 1, 32, 32, 32))
         self.assertEqual(model.viTrans.trans.final_linear.in_features, 16)
         self.assertEqual(model.viTrans.trans.final_linear.out_features, 8)
+
+    def test_variable_view_fusion_accepts_one_to_seven_views(self) -> None:
+        model = Generator(
+            in_channels=2, num_filters=8, volume_size=32,
+            view_fusion="mean_count", max_views=7,
+        ).eval()
+        for count in range(1, 8):
+            with self.subTest(count=count):
+                sample = torch.zeros((1, 8, 32, 32, 32), dtype=torch.float32)
+                sample[:, :count, 16, 16, 16] = 1.0
+                sample[:, 7] = count / 7
+                fused = model.fuse_views(sample)
+                self.assertEqual(tuple(fused.shape), (1, 2, 32, 32, 32))
+                self.assertEqual(float(fused[0, 0, 16, 16, 16]), 1.0)
+                self.assertAlmostEqual(float(fused[0, 1, 0, 0, 0]), count / 7)
+                pair = conditional_pair(fused, torch.zeros((1, 1, 32, 32, 32)))
+                self.assertEqual(tuple(pair.shape), (1, 3, 32, 32, 32))
+                if count in (1, 7):
+                    with torch.no_grad():
+                        output = model(sample)
+                    self.assertEqual(tuple(output.shape), (1, 1, 32, 32, 32))
+        with self.assertRaisesRegex(ValueError, "view slots"):
+            model(torch.zeros((1, 7, 32, 32, 32)))
+
+    def test_variable_view_training_updates_on_single_final_batch(self) -> None:
+        config = {
+            "model": {
+                "volume_size": 32,
+                "generator": {
+                    "base_filters": 8, "in_channels": 2,
+                    "view_fusion": "mean_count", "max_views": 7,
+                },
+                "critic": {"channels": 3, "dim": 32},
+            }
+        }
+        generator, critic = build_models(config, "cpu")
+        sample = torch.zeros((1, 8, 32, 32, 32))
+        sample[:, 0, 16, 16, 16] = 1.0
+        sample[:, 7] = 1.0 / 7.0
+        target = torch.zeros((1, 1, 32, 32, 32))
+        metrics, steps = train_one_epoch(
+            loader=[{"input": sample, "target": target}],
+            generator=generator,
+            critic=critic,
+            generator_optimizer=torch.optim.Adam(generator.parameters(), lr=1e-4),
+            critic_optimizer=torch.optim.Adam(critic.parameters(), lr=1e-4),
+            scaler=make_grad_scaler(False),
+            device=torch.device("cpu"),
+            amp_enabled=False,
+            critic_steps_per_generator=2,
+            l1_weight=1.0,
+            gradient_penalty_weight=1.0,
+            gradient_clip_norm=None,
+            global_step=0,
+        )
+        self.assertEqual(steps, 1)
+        self.assertTrue(torch.isfinite(torch.tensor(metrics["generator_loss"])))
 
     def test_small_critic_forward_and_backward(self) -> None:
         critic = Discriminator(torch.device("cpu"), channels=2).train()

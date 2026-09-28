@@ -126,6 +126,16 @@ def _make_loader(
     return DataLoader(**options)
 
 
+def _training_drop_last(
+    dataset: ImageCASDataset, training: Mapping[str, Any]
+) -> bool:
+    """Keep every case when input view counts vary between cases."""
+
+    if dataset.train_view_range is not None or dataset.train_counts is not None:
+        return False
+    return bool(training.get("drop_last", True))
+
+
 def _validate_config(config: Mapping[str, Any]) -> None:
     for section in ("experiment", "data", "model", "training"):
         if not isinstance(config.get(section), Mapping):
@@ -225,6 +235,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "scientific_conventions": {
             "projection_input": "per-view binary cone support backprojection",
             "view_aggregation": data_config["preprocessing"].get("combine", "sum"),
+            "model_view_fusion": getattr(generator, "view_fusion", "none"),
             "source_axis_order": "XYZ",
             "network_axis_order": "ZYX",
             "target_binarization": "vol > 0",
@@ -292,7 +303,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             batch_size=batch_size,
             workers=workers,
             shuffle=True,
-            drop_last=bool(training.get("drop_last", True)),
+            drop_last=_training_drop_last(train_dataset, training),
             pin_memory=device.type == "cuda",
             seed=seed + epoch,
         )

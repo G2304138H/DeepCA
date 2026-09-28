@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import math
 import random
+from collections.abc import Sized
 from collections import defaultdict
 from typing import Any, Iterable, Mapping, Optional
 
@@ -59,9 +60,14 @@ def set_requires_grad(module: torch.nn.Module, enabled: bool) -> None:
 
 
 def conditional_pair(condition: torch.Tensor, volume: torch.Tensor) -> torch.Tensor:
-    if condition.shape != volume.shape:
+    if (
+        condition.ndim != 5 or volume.ndim != 5
+        or condition.shape[0] != volume.shape[0]
+        or condition.shape[2:] != volume.shape[2:]
+        or volume.shape[1] != 1
+    ):
         raise ValueError(
-            f"Condition and volume must have equal [B,1,D,H,W] shapes, got "
+            f"Expected condition [B,C,D,H,W] and volume [B,1,D,H,W], got "
             f"{tuple(condition.shape)} and {tuple(volume.shape)}."
         )
     return torch.cat((condition, volume), dim=1)
@@ -153,9 +159,13 @@ def build_scheduler(
 def _move_batch(batch: Mapping[str, Any], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     condition = batch["input"].to(device=device, dtype=torch.float32, non_blocking=True)
     target = batch["target"].to(device=device, dtype=torch.float32, non_blocking=True)
-    if condition.ndim != 5 or condition.shape[1] != 1 or target.shape != condition.shape:
+    if (
+        condition.ndim != 5 or target.ndim != 5
+        or target.shape[1] != 1 or target.shape[0] != condition.shape[0]
+        or target.shape[2:] != condition.shape[2:]
+    ):
         raise ValueError(
-            "Expected matching input/target tensors [B,1,D,H,W], got "
+            "Expected input [B,C,D,H,W] and target [B,1,D,H,W], got "
             f"{tuple(condition.shape)} and {tuple(target.shape)}."
         )
     return condition, target
@@ -198,9 +208,11 @@ def train_one_epoch(
     critic_interval = int(critic_steps_per_generator)
     if critic_interval <= 0:
         raise ValueError("critic_steps_per_generator must be positive.")
+    batch_count = len(loader) if isinstance(loader, Sized) else None
 
     for batch_index, batch in enumerate(loader):
         condition, target = _move_batch(batch, device)
+        critic_condition = generator.fuse_views(condition)
         batch_size = int(condition.shape[0])
 
         set_requires_grad(generator, False)
@@ -210,14 +222,14 @@ def train_one_epoch(
             with autocast_context(amp_enabled, device):
                 prediction = generator(condition)
         with autocast_context(amp_enabled, device):
-            real_score = critic(conditional_pair(condition, target)).mean()
-            fake_score = critic(conditional_pair(condition, prediction).detach()).mean()
+            real_score = critic(conditional_pair(critic_condition, target)).mean()
+            fake_score = critic(conditional_pair(critic_condition, prediction).detach()).mean()
         # Gradient penalty is evaluated in FP32 for stable second derivatives.
         with autocast_context(False, device):
             gp = gradient_penalty(
                 critic,
-                conditional_pair(condition.float(), target.float()),
-                conditional_pair(condition.float(), prediction.float()).detach(),
+                conditional_pair(critic_condition.float(), target.float()),
+                conditional_pair(critic_condition.float(), prediction.float()).detach(),
                 weight=gradient_penalty_weight,
             )
             critic_loss = fake_score.float() - real_score.float() + gp
@@ -236,13 +248,14 @@ def train_one_epoch(
         counts["gradient_penalty"] += batch_size
         counts["wasserstein"] += batch_size
 
-        if (batch_index + 1) % critic_interval == 0:
+        final_batch = batch_count is not None and batch_index + 1 == batch_count
+        if (batch_index + 1) % critic_interval == 0 or final_batch:
             set_requires_grad(generator, True)
             set_requires_grad(critic, False)
             generator_optimizer.zero_grad(set_to_none=True)
             with autocast_context(amp_enabled, device):
                 prediction = generator(condition)
-                adversarial = -critic(conditional_pair(condition, prediction)).mean()
+                adversarial = -critic(conditional_pair(critic_condition, prediction)).mean()
                 l1 = F.l1_loss(prediction, target)
                 generator_loss = adversarial + float(l1_weight) * l1
             _finite("generator loss", generator_loss, batch)
@@ -287,10 +300,11 @@ def validate(
     count = 0
     for batch in loader:
         condition, target = _move_batch(batch, device)
+        critic_condition = generator.fuse_views(condition)
         batch_size = int(condition.shape[0])
         with autocast_context(amp_enabled, device):
             prediction = generator(condition)
-            adversarial = -critic(conditional_pair(condition, prediction)).mean()
+            adversarial = -critic(conditional_pair(critic_condition, prediction)).mean()
             l1 = F.l1_loss(prediction, target)
             combined = adversarial + float(l1_weight) * l1
         _finite("validation L1", l1, batch)
