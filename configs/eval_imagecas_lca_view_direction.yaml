@@ -1,8 +1,9 @@
-extends: eval_imagecas_lca.yaml
+extends: eval_imagecas_lca_variable_views.yaml
 
 evaluation:
   mode: inaccurate_view_direction
-  output_dir: /export/home2/reny0012/result/deepca_imagecas/lca/evaluation_view_direction
+  checkpoint: /export/home2/reny0012/result/deepca_imagecas/lca_variable_views/checkpoints/best.pt
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/lca_variable_views/evaluation_inacc_view
   save_predictions: true
   view_direction_robustness:
     error_degrees: [0.2, 0.5, 1.0, 2.0]
