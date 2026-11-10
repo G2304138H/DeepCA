@@ -134,6 +134,34 @@ class ImageCASDataTestCase(unittest.TestCase):
             },
         }
 
+    def test_camera_error_changes_only_backprojection_camera_and_cache(self):
+        import copy
+        from unittest.mock import patch
+        from deepca.data import binary_cone_backproject
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt.npz"
+        self.write_projection(projection)
+        self.write_gt(gt)
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config(cache_enabled=True)
+        clean = ImageCASDataset([pair], config, training=False)[0]
+        noisy_config = copy.deepcopy(config)
+        noisy_config["evaluation"] = {"view_direction_error_deg": 2.0}
+        with patch("deepca.data.binary_cone_backproject", wraps=binary_cone_backproject) as call:
+            noisy = ImageCASDataset([pair], noisy_config, training=False)[0]
+            self.assertEqual(call.call_count, 1)
+            np.testing.assert_array_equal(call.call_args.args[0], np.ones((2, 16, 16)))
+            np.testing.assert_allclose(call.call_args.args[1], [0, 30])
+            np.testing.assert_allclose(call.call_args.args[2], [92, 72])
+        np.testing.assert_array_equal(clean["target"], noisy["target"])
+        self.assertEqual(len(list((self.root / "cache").rglob("*.npz"))), 2)
+        meta = json.loads(noisy["metadata_json"])
+        self.assertEqual(meta["view_direction_error_deg"], 2.0)
+        self.assertEqual(meta["phi_deg"], [90, 70])
+        self.assertEqual(meta["input_phi_deg"], [92, 72])
+        train = ImageCASDataset([pair], noisy_config, training=True)
+        self.assertEqual(train.view_direction_error_deg, 0.)
+
     def test_projection_loader_uses_fallbacks_and_skips_optional_object(self) -> None:
         path = self.root / "rca_0001.npz"
         self.write_projection(path, include_object_metadata=True)

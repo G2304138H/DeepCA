@@ -612,6 +612,9 @@ class ImageCASDataset(Dataset):
         self.pairs = tuple(pairs)
         self.config = config
         self.training = bool(training)
+        from .view_direction_evaluation import validate_error
+        self.view_direction_error_deg = (0.0 if training else validate_error(
+            config.get("evaluation", {}).get("view_direction_error_deg", 0.0), allow_zero=True))
         self.measure_backprojection_time = bool(measure_backprojection_time)
         self.epoch = 0
         self.image_replacements = _normalise_image_replacements(
@@ -863,6 +866,8 @@ class ImageCASDataset(Dataset):
             raise ValueError("preprocessing.fov_mode must be 'detector' or 'fixed'.")
         grid = make_cubic_grid(self.volume_size, fov_mm, center_mm)
 
+        camera_theta = projection.theta_deg[indices].astype(np.float64)
+        camera_phi = projection.phi_deg[indices].astype(np.float64) + self.view_direction_error_deg
         cache_payload = {
             "schema_version": 4 if self.view_fusion == "mean_count" else 3,
             "algorithm": "stage2_binary_cone_support_backprojection_v1",
@@ -870,6 +875,7 @@ class ImageCASDataset(Dataset):
             "ground_truth": _file_signature(pair.ground_truth_path),
             "case_id": pair.case_id,
             "view_indices": indices.tolist(),
+            "view_direction_error_deg": self.view_direction_error_deg,
             "selected_images_sha256": selected_images_sha256,
             "image_replacements": {
                 "source_view_indices": replaced_view_indices,
@@ -917,8 +923,8 @@ class ImageCASDataset(Dataset):
             backprojection_started = time.perf_counter()
             input_volume = binary_cone_backproject(
                 selected,
-                projection.theta_deg[indices],
-                projection.phi_deg[indices],
+                camera_theta,
+                camera_phi,
                 grid=grid,
                 sid_m=projection.sid_m,
                 source_to_isocentre_m=projection.source_to_isocentre_m,
@@ -959,9 +965,12 @@ class ImageCASDataset(Dataset):
             "view_indices": indices.tolist(),
             "num_views": selected_num_views,
             "replaced_view_indices": replaced_view_indices,
+            "view_direction_error_deg": self.view_direction_error_deg,
             "selected_images_sha256": selected_images_sha256,
             "replacement_images_sha256": replacement_sha256_by_view,
             "clinical_views": [projection.clinical_views[index] for index in indices],
+            "input_theta_deg": camera_theta.tolist(),
+            "input_phi_deg": camera_phi.tolist(),
             "theta_deg": projection.theta_deg[indices].astype(float).tolist(),
             "phi_deg": projection.phi_deg[indices].astype(float).tolist(),
             "sid_m": projection.sid_m,

@@ -133,3 +133,31 @@ Please see [license](https://github.com/WangStephen/DeepCA/blob/main/LICENSE).
 DeepCA model architectures are revised based on [Compact Transformers](https://github.com/SHI-Labs/Compact-Transformers) and [Dynamic Snake Convolution](https://github.com/YaoleiQi/DSCNet).
 
 Cone-beam forward projection simulation is based on [TIGRE Toolbox](https://github.com/CERN/TIGRE).
+
+## Scalar view-direction error evaluation
+
+Run `python evaluate.py --config configs/eval_imagecas_rca_view_direction.yaml`
+(or the LCA equivalent). Update checkpoint, dataset and output paths in the
+inherited evaluation configuration for your server.
+
+```yaml
+evaluation:
+  mode: inaccurate_view_direction
+  view_direction_robustness:
+    error_degrees: [0.2, 0.5, 1.0, 2.0]
+```
+
+Exactly four conditions are run. Each selected camera receives a deterministic
+polar-angle tilt equal to the listed magnitude, matching the vessel-tree and
+AutoCAR scalar protocol. This is a fixed bias, not Gaussian noise or a random
+maximum. Masks and targets remain unchanged; backprojections are recomputed
+with incorrect camera angles, and cache keys include the error.
+
+Each condition saves the original prediction NPZ schema (`vol`, `spacing`,
+`origin`, `axis_order`, `case_id`, `view_indices`, `threshold`, `checkpoint`)
+under `<output_dir>/error_0p2deg/<split>/predictions/views_2/` (and similarly
+for the other error levels/view counts). Use these directories with your
+existing downstream evaluator. Prediction saving is mandatory for this sweep.
+It uses a fresh condition directory to prevent mixing earlier results.
+`view_direction_robustness_summary.json` links all individual summaries.
+The accurate baseline remains a separate standard evaluation.

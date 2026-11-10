@@ -1,0 +1,8 @@
+extends: eval_imagecas_rca.yaml
+
+evaluation:
+  mode: inaccurate_view_direction
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca/evaluation_view_direction
+  save_predictions: true
+  view_direction_robustness:
+    error_degrees: [0.2, 0.5, 1.0, 2.0]

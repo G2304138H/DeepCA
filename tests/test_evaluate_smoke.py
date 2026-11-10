@@ -186,6 +186,23 @@ class EvaluationSmokeTestCase(unittest.TestCase):
             prediction_path = Path(result["prediction_path"])
             self.assertTrue(prediction_path.is_file())
 
+            angular = copy.deepcopy(config)
+            angular["evaluation"].update(mode="inaccurate_view_direction",
+                output_dir=str(root / "angular"), save_predictions=False,
+                view_direction_robustness={"error_degrees": [.2, .5, 1., 2.]})
+            angular_path = root / "angular.yaml"
+            angular_path.write_text(yaml.safe_dump(angular))
+            self.assertEqual(evaluate.main(["--config", str(angular_path)]), 0)
+            sweep = json.loads((root / "angular/view_direction_robustness_summary.json").read_text())
+            self.assertEqual(sweep["num_conditions"], 4)
+            for name in ("0p2", "0p5", "1", "2"):
+                files = list((root / "angular" / f"error_{name}deg").rglob("predictions/**/*.npz"))
+                self.assertEqual(len(files), 1)
+                with np.load(files[0]) as pred, np.load(prediction_path) as original:
+                    self.assertEqual(set(pred.files), set(original.files))
+                    self.assertEqual(pred["vol"].shape, original["vol"].shape)
+                    np.testing.assert_array_equal(pred["spacing"], original["spacing"])
+
             mismatched = copy.deepcopy(config)
             mismatched["data"]["vessel_type"] = "lca"
             mismatched["evaluation"]["output_dir"] = str(root / "mismatch")

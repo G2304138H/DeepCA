@@ -389,6 +389,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.view_counts if args.view_counts is not None else evaluation.get("view_counts", [2])
     )
     evaluation_mode = evaluation.get("mode", "standard")
+    if evaluation_mode == "inaccurate_view_direction":
+        from deepca.view_direction_evaluation import run_sweep
+        return run_sweep(config, args, main)
+
     fixed_translation_mode = _is_fixed_translation_mode(evaluation_mode)
     if not fixed_translation_mode and not _is_standard_evaluation_mode(
         evaluation_mode
@@ -767,6 +771,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "prediction serialization",
             ],
         },
+        "view_direction_error_deg": float(evaluation.get("view_direction_error_deg", 0.0)),
         "successful_results": len(rows),
         "failed_results": len(failures),
         "checkpoint_config_mismatch_override": bool(
