@@ -12,6 +12,7 @@ from deepca.data import (
     CasePair,
     ImageCASDataset,
     build_projection_index,
+    inspect_projection_identity,
     load_ground_truth_npz,
     load_projection_npz,
     resolve_case_pairs,
@@ -133,6 +134,40 @@ class ImageCASDataTestCase(unittest.TestCase):
                 },
             },
         }
+
+    def test_nested_projection_without_identity_metadata_indexes_and_loads(self):
+        for vessel in ("rca", "lca"):
+            with self.subTest(vessel=vessel):
+                path = self.root / vessel / "0001" / "vessel_code_step6.npz"
+                self.write_projection(path, vessel=vessel, stored_calibration=True)
+                with np.load(path) as archive:
+                    payload = {key: archive[key] for key in archive.files
+                               if key not in {"sample_name", "source_relpath"}}
+                payload["sample_name"] = np.asarray("vessel_code_step6")
+                np.savez_compressed(path, **payload)
+                case_id = f"{vessel}_0001"
+                self.assertEqual(inspect_projection_identity(path), (vessel, 1))
+                self.assertEqual(build_projection_index(self.root / vessel,
+                    expected_vessel=vessel), {case_id: path.resolve()})
+                loaded = load_projection_npz(path, expected_vessel=vessel,
+                    expected_case_id=case_id, fallback_sid_m=None,
+                    fallback_detector_pixel_spacing_mm=None)
+                self.assertEqual(loaded.case_id, case_id)
+
+    def test_nested_projection_rejects_conflicting_metadata(self):
+        path = self.root / "rca" / "1" / "vessel_code_step6.npz"
+        self.write_projection(path, vessel="rca", number=2)
+        with self.assertRaisesRegex(ValueError, "Conflicting case identities"):
+            inspect_projection_identity(path)
+        with self.assertRaisesRegex(ValueError, "Conflicting case identities"):
+            load_projection_npz(path, fallback_sid_m=1.0,
+                fallback_detector_pixel_spacing_mm=0.55)
+
+    def test_nested_projection_rejects_wrong_artery(self):
+        path = self.root / "rca" / "1" / "vessel_code_step6.npz"
+        self.write_projection(path, vessel="rca")
+        with self.assertRaisesRegex(ValueError, "expected LCA"):
+            inspect_projection_identity(path, expected_vessel="lca")
 
     def test_camera_error_changes_only_backprojection_camera_and_cache(self):
         import copy

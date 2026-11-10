@@ -117,6 +117,11 @@ def _unit_scale_to_m(units: str, *, field: str) -> float:
 
 def _identity_candidates(npz: np.lib.npyio.NpzFile, path: Path) -> list[tuple[str, int, str]]:
     candidates: list[tuple[str, int, str]] = []
+    # Nested realism archives use <artery>/<case-number>/vessel_code_step6.npz.
+    # Keep the directory identity alongside metadata so contradictions still fail.
+    parent_vessel = path.parent.parent.name.lower()
+    if parent_vessel in {"rca", "lca"} and path.parent.name.isdigit():
+        candidates.append((parent_vessel, int(path.parent.name), "parent_directory"))
     for source, value in (("filename", path.stem),):
         match = CASE_PATTERN.fullmatch(str(value).strip())
         if match:
