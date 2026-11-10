@@ -1,0 +1,16 @@
+extends: eval_imagecas_rca_variable_views.yaml
+
+data:
+  projection_root: /dataset/reny0012/imagecas_realism/seg_err_artifacts/rca
+  views:
+    eval_selection: first
+    indices: [0, 1]
+
+evaluation:
+  mode: standard
+  split: test
+  checkpoint: /export/home2/reny0012/result/deepca_imagecas/rca_variable_views/checkpoints/best.pt
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca_variable_views/evaluation_seg_err_artifacts
+  save_predictions: true
+  view_counts: [2]
+  view_direction_error_deg: 0.0
