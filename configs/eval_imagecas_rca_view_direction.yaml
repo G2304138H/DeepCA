@@ -5,5 +5,6 @@ evaluation:
   checkpoint: /export/home2/reny0012/result/deepca_imagecas/rca_variable_views/checkpoints/best.pt
   output_dir: /export/home2/reny0012/result/deepca_imagecas/rca_variable_views/evaluation_inacc_view
   save_predictions: true
+  view_counts: [2]
   view_direction_robustness:
     error_degrees: [0.2, 0.5, 1.0, 2.0]
