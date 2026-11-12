@@ -51,7 +51,7 @@ def run_sweep(config, args, evaluate):
     run_configs = root / "run_configs"
     run_configs.mkdir(parents=True, exist_ok=True)
     manifest = dict(status="running", error_model="fixed_magnitude_meridian_tilt",
-                    error_degrees=errors, images_changed=False, results=[])
+                    error_degrees=errors, perturbation_scope="first_input_view", images_changed=False, results=[])
     summary_path = root / "view_direction_robustness_summary.json"
     def save():
         summary_path.write_text(json.dumps(manifest, indent=2) + "\n")

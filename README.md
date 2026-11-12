@@ -161,3 +161,13 @@ existing downstream evaluator. Prediction saving is mandatory for this sweep.
 It uses a fresh condition directory to prevent mixing earlier results.
 `view_direction_robustness_summary.json` links all individual summaries.
 The accurate baseline remains a separate standard evaluation.
+
+
+### First-input view-direction robustness
+
+View-direction errors now affect only the first selected input view, in the
+ordered input list (not necessarily source view index 0). Other cameras and
+all input masks remain unchanged. The scalar degree sweep adds the requested
+positive phi offset to that first camera. New sweep summaries record
+`perturbation_scope: first_input_view`. Use fresh output directories and rerun
+inference to replace older experiments that perturbed every selected view.

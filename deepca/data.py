@@ -872,7 +872,9 @@ class ImageCASDataset(Dataset):
         grid = make_cubic_grid(self.volume_size, fov_mm, center_mm)
 
         camera_theta = projection.theta_deg[indices].astype(np.float64)
-        camera_phi = projection.phi_deg[indices].astype(np.float64) + self.view_direction_error_deg
+        camera_phi = projection.phi_deg[indices].astype(np.float64)
+        # Input order, not dataset view ID: leave every subsequent camera accurate.
+        camera_phi[:1] += self.view_direction_error_deg
         cache_payload = {
             "schema_version": 4 if self.view_fusion == "mean_count" else 3,
             "algorithm": "stage2_binary_cone_support_backprojection_v1",
@@ -881,6 +883,7 @@ class ImageCASDataset(Dataset):
             "case_id": pair.case_id,
             "view_indices": indices.tolist(),
             "view_direction_error_deg": self.view_direction_error_deg,
+            "view_direction_error_scope": "first_input_view",
             "selected_images_sha256": selected_images_sha256,
             "image_replacements": {
                 "source_view_indices": replaced_view_indices,
@@ -971,6 +974,7 @@ class ImageCASDataset(Dataset):
             "num_views": selected_num_views,
             "replaced_view_indices": replaced_view_indices,
             "view_direction_error_deg": self.view_direction_error_deg,
+            "view_direction_error_scope": "first_input_view",
             "selected_images_sha256": selected_images_sha256,
             "replacement_images_sha256": replacement_sha256_by_view,
             "clinical_views": [projection.clinical_views[index] for index in indices],

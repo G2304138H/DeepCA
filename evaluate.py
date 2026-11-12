@@ -242,6 +242,7 @@ def _save_prediction(
     view_indices: Sequence[int],
     threshold: float,
     checkpoint_path: Path,
+    camera_metadata: dict | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp.npz")
@@ -255,6 +256,7 @@ def _save_prediction(
         view_indices=np.asarray(view_indices, dtype=np.int32),
         threshold=np.asarray(threshold, dtype=np.float32),
         checkpoint=np.asarray(str(checkpoint_path)),
+        view_direction_metadata_json=np.asarray(json.dumps(camera_metadata or {}, sort_keys=True)),
     )
     os.replace(temporary, path)
 
@@ -657,6 +659,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                         view_indices=metadata["view_indices"],
                         threshold=threshold,
                         checkpoint_path=checkpoint_path,
+                        camera_metadata={key: metadata[key] for key in (
+                            "view_indices", "theta_deg", "phi_deg", "input_theta_deg", "input_phi_deg",
+                            "view_direction_error_deg", "view_direction_error_scope",
+                        )},
                     )
                 rows.append(
                     {
@@ -667,6 +673,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                         "clinical_views": metadata["clinical_views"],
                         "theta_deg": metadata["theta_deg"],
                         "phi_deg": metadata["phi_deg"],
+                        "input_theta_deg": metadata["input_theta_deg"],
+                        "input_phi_deg": metadata["input_phi_deg"],
+                        "view_direction_error_scope": metadata["view_direction_error_scope"],
                         "dice": dice,
                         "cldice": cldice,
                         "threshold": threshold,
@@ -772,6 +781,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             ],
         },
         "view_direction_error_deg": float(evaluation.get("view_direction_error_deg", 0.0)),
+        "view_direction_error_scope": "first_input_view",
         "successful_results": len(rows),
         "failed_results": len(failures),
         "checkpoint_config_mismatch_override": bool(

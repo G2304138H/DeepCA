@@ -1,0 +1,11 @@
+extends: eval_imagecas_rca.yaml
+
+evaluation:
+  mode: inaccurate_view_direction
+  checkpoint: /export/home2/reny0012/result/deepca_imagecas/rca/checkpoints/best.pt
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/rca/evaluation_inacc_first_view
+  split: test
+  save_predictions: true
+  view_counts: [2]
+  view_direction_robustness:
+    error_degrees: [0.5, 1.0, 2.0, 4.0]

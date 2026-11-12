@@ -187,15 +187,30 @@ class ImageCASDataTestCase(unittest.TestCase):
             self.assertEqual(call.call_count, 1)
             np.testing.assert_array_equal(call.call_args.args[0], np.ones((2, 16, 16)))
             np.testing.assert_allclose(call.call_args.args[1], [0, 30])
-            np.testing.assert_allclose(call.call_args.args[2], [92, 72])
+            np.testing.assert_allclose(call.call_args.args[2], [92, 70])
         np.testing.assert_array_equal(clean["target"], noisy["target"])
         self.assertEqual(len(list((self.root / "cache").rglob("*.npz"))), 2)
         meta = json.loads(noisy["metadata_json"])
         self.assertEqual(meta["view_direction_error_deg"], 2.0)
         self.assertEqual(meta["phi_deg"], [90, 70])
-        self.assertEqual(meta["input_phi_deg"], [92, 72])
+        self.assertEqual(meta["input_phi_deg"], [92, 70])
+        self.assertEqual(meta["view_direction_error_scope"], "first_input_view")
         train = ImageCASDataset([pair], noisy_config, training=True)
         self.assertEqual(train.view_direction_error_deg, 0.)
+
+    def test_camera_error_follows_selected_order_not_source_index(self):
+        projection = self.root / "rca_0001.npz"
+        gt = self.root / "gt.npz"
+        self.write_projection(projection)
+        self.write_gt(gt)
+        pair = CasePair("rca_0001", "rca", 1, projection.resolve(), gt.resolve())
+        config = self.dataset_config(cache_enabled=False)
+        config["data"]["views"]["indices"] = [1, 0]
+        config["evaluation"] = {"view_direction_error_deg": 4.0}
+        metadata = json.loads(ImageCASDataset([pair], config, training=False)[0]["metadata_json"])
+        self.assertEqual(metadata["view_indices"], [1, 0])
+        self.assertEqual(metadata["input_phi_deg"], [74, 90])
+        self.assertEqual(metadata["phi_deg"], [70, 90])
 
     def test_projection_loader_uses_fallbacks_and_skips_optional_object(self) -> None:
         path = self.root / "rca_0001.npz"
