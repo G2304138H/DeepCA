@@ -171,3 +171,15 @@ all input masks remain unchanged. The scalar degree sweep adds the requested
 positive phi offset to that first camera. New sweep summaries record
 `perturbation_scope: first_input_view`. Use fresh output directories and rerun
 inference to replace older experiments that perturbed every selected view.
+
+### Unified RCA + LCA training
+
+One shared model can now train from the existing separate artery datasets:
+
+```bash
+python train.py --config configs/imagecas_unified.yaml --dry-run
+python train.py --config configs/imagecas_unified.yaml --device cuda:0
+```
+
+See [unified training](docs/UNIFIED_TRAINING.md) for source paths, patient-safe
+split handling, variable-view training, resume commands, and validation outputs.

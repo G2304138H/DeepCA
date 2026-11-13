@@ -297,6 +297,8 @@ def validate(
     generator.eval()
     critic.eval()
     totals: defaultdict[str, float] = defaultdict(float)
+    vessel_totals: defaultdict[str, float] = defaultdict(float)
+    vessel_counts: defaultdict[str, int] = defaultdict(int)
     count = 0
     for batch in loader:
         condition, target = _move_batch(batch, device)
@@ -311,7 +313,14 @@ def validate(
         totals["l1_loss"] += float(l1) * batch_size
         totals["adversarial_loss"] += float(adversarial) * batch_size
         totals["combined_loss"] += float(combined) * batch_size
+        per_case_l1 = (prediction.float() - target.float()).abs().flatten(1).mean(1)
+        for vessel, loss in zip(batch.get("vessel_type", []), per_case_l1):
+            vessel_totals[vessel] += float(loss)
+            vessel_counts[vessel] += 1
         count += batch_size
     if count == 0:
         raise RuntimeError("Validation loader produced no cases.")
-    return {name: value / count for name, value in totals.items()}
+    metrics = {name: value / count for name, value in totals.items()}
+    metrics.update({f"{vessel}_l1_loss": total / vessel_counts[vessel]
+                    for vessel, total in vessel_totals.items()})
+    return metrics

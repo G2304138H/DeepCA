@@ -32,8 +32,6 @@ from deepca.config import (
 )
 from deepca.data import (
     ImageCASDataset,
-    build_projection_index,
-    resolve_case_pairs,
     worker_seed,
 )
 from deepca.engine import (
@@ -45,12 +43,13 @@ from deepca.engine import (
     validate,
 )
 from deepca.modeling import architecture_metadata, build_models
-from deepca.splits import load_resolved_splits
+from deepca.cohorts import resolve_training_pairs, training_sources
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="Training YAML configuration.")
+    parser.add_argument("--dry-run", action="store_true", help="Validate pairings and write the manifest without training.")
     parser.add_argument("--resume", help="Rich last/best checkpoint to resume.")
     parser.add_argument("--device", help="Override configured device, e.g. cuda:0 or cpu.")
     return parser.parse_args(argv)
@@ -141,12 +140,7 @@ def _validate_config(config: Mapping[str, Any]) -> None:
         if not isinstance(config.get(section), Mapping):
             raise KeyError(f"Configuration requires a {section!r} mapping.")
     data = config["data"]
-    for key in ("vessel_type", "projection_root", "ground_truth_root", "split_json"):
-        if key not in data:
-            raise KeyError(f"data.{key} is required.")
-    vessel = str(data["vessel_type"]).lower()
-    if vessel not in {"lca", "rca"}:
-        raise ValueError("data.vessel_type must be 'lca' or 'rca'.")
+    training_sources(data)
     model_size = int(config["model"].get("volume_size", 128))
     data_size = int(data["preprocessing"].get("volume_size", 128))
     if model_size != data_size:
@@ -184,27 +178,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     save_resolved_config(config, output_dir / "resolved_config.yaml")
 
-    vessel = str(data_config["vessel_type"]).lower()
-    resolved_splits = load_resolved_splits(data_config["split_json"], vessel)
-    split_manifest = resolved_splits.as_manifest()
-    pairs_by_split: dict[str, Any] = {}
-    projection_index = build_projection_index(
-        data_config["projection_root"], expected_vessel=vessel
-    )
-    for split_name, case_ids in resolved_splits.split_ids.items():
-        pairs, failures = resolve_case_pairs(
-            case_ids,
-            projection_root=data_config["projection_root"],
-            ground_truth_root=data_config["ground_truth_root"],
-            vessel_type=vessel,
-            projection_index=projection_index,
-            strict=True,
-        )
-        if failures:
-            raise RuntimeError(f"Unexpected strict pairing failures: {failures}")
-        pairs_by_split[split_name] = pairs
+    pairs_by_split, split_manifest = resolve_training_pairs(data_config)
     split_manifest["resolved_pairs"] = _pair_manifest(pairs_by_split)
     _atomic_json(output_dir / "resolved_cases.json", split_manifest)
+
+    counts = {split: {v: sum(p.vessel_type == v for p in pairs)
+                      for v in training_sources(data_config)}
+              for split, pairs in pairs_by_split.items()}
+    print(json.dumps({"case_counts": counts}, sort_keys=True), flush=True)
+    if args.dry_run:
+        return 0
 
     train_dataset = ImageCASDataset(pairs_by_split["train"], config, training=True)
     val_dataset = ImageCASDataset(pairs_by_split["val"], config, training=False)

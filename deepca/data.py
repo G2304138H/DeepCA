@@ -746,7 +746,9 @@ class ImageCASDataset(Dataset):
 
     def _load_case(self, pair: CasePair) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
         data_config = self.config["data"]
-        calibration = data_config["calibration"]
+        calibration = dict(data_config["calibration"])
+        calibration.update(data_config.get("sources", {}).get(
+            pair.vessel_type, {}).get("calibration", {}))
         target_config = data_config.get("ground_truth", {})
         projection = load_projection_npz(
             pair.projection_path,

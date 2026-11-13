@@ -1,0 +1,30 @@
+extends: imagecas_common.yaml
+
+experiment:
+  name: deepca_imagecas_unified
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/unified
+
+data:
+  vessel_type: both
+  # Same numeric ID means the same ImageCAS patient. Never move holdouts into train.
+  patient_split_policy: holdout_priority
+  sources:
+    rca:
+      projection_root: /dataset/reny0012/imagecas_autocar_6/stage_2_imagecas_all_branch
+      ground_truth_root: /dataset/reny0012/imagecas_voxel
+      split_json: /export/home2/reny0012/result/vessel_trees/experiments_for_paper/exp6_rca_bspline_parallel_no_cross_vggt_refiner/split.json
+      calibration:
+        expected_detector_pixel_spacing_mm: 0.55
+        fallback_detector_pixel_spacing_mm: 0.55
+    lca:
+      projection_root: /dataset/reny0012/vessel_code_stage_2_lca_paired/anchors
+      ground_truth_root: /dataset/reny0012/imagecas_voxel
+      split_json: /export/home2/reny0012/result/vessel_trees/multi_branch_experiments/vggt_branch_prefix_lca_grouped_visibility_1to7_clinical_views_refiner_5mm/split.json
+      calibration:
+        expected_detector_pixel_spacing_mm: 0.65
+        fallback_detector_pixel_spacing_mm: 0.65
+  cache:
+    directory: /export/home2/reny0012/result/deepca_imagecas/cache/unified
+
+training:
+  drop_last: false
