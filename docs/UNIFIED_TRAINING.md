@@ -59,7 +59,56 @@ counts. It does not preprocess all archives or exercise the GPU. Training writes
 and saves `checkpoints/best.pt` and `checkpoints/last.pt`. Checkpoint selection
 uses case-weighted combined validation L1, so a larger cohort has more weight.
 
-The existing `evaluate.py` still takes a single-artery config. To evaluate this
-shared checkpoint, use separate RCA/LCA evaluation configs with the matching
-model architecture and the final patient-safe splits from `resolved_cases.json`.
-Do not use the unified training config directly with `evaluate.py`.
+## Evaluate the unified model on the test set
+
+Run the standard two-view model with:
+
+```bash
+python evaluate_unified.py --config configs/eval_imagecas_unified.yaml
+```
+
+For the variable-view model (evaluates 1–7 views separately):
+
+```bash
+python evaluate_unified.py --config configs/eval_imagecas_unified_variable_views.yaml
+```
+
+Both configurations default to `split: test`, `save_predictions: true`, and the
+corresponding unified `checkpoints/best.pt`. The checkpoint was selected using
+validation loss; the test set is used only for evaluation. The script uses the
+final patient-safe case lists saved in the checkpoint, including any holdout
+promotions, rather than the original separate split JSON files. Only the
+selected split's projection/ground-truth pairs are required. Source paths may
+be relocated in the config; calibration and model compatibility are checked.
+
+For a different checkpoint or view counts:
+
+```bash
+python evaluate_unified.py --config configs/eval_imagecas_unified.yaml \
+  --checkpoint /path/to/best.pt --split test --view-counts 2
+```
+
+No `--device` is needed under the usual single-GPU Slurm allocation. The
+configuration uses `cuda:0` within the job's visible devices.
+
+Default two-view output directory:
+`/export/home2/reny0012/result/deepca_imagecas/unified/evaluation/test/`
+
+```text
+predictions/rca/views_2/rca_NNNN.npz
+predictions/lca/views_2/lca_NNNN.npz
+per_case.csv
+per_case.json
+summary.json
+failures.json
+resolved_config.yaml
+```
+
+The existing evaluator supplies the binary prediction NPZ format, physical grid
+metadata, Dice, clDice, reconstruction/inference timing, per-case failure
+reporting, and overall/per-artery/per-view summaries. Variable-view outputs use
+`unified_variable_views/evaluation/test/`, with separate `views_1` through
+`views_7` folders under each artery. Inspect `failures.json` for unavailable
+views or missing/corrupt cases; as in the existing evaluator, a partial run can
+produce metrics for the successful cases. Standard evaluation is supported;
+perturbation sweep modes are not yet supported for unified configs.

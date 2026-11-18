@@ -35,6 +35,7 @@ from deepca.metrics import (
 )
 from deepca.modeling import architecture_metadata, build_generator
 from deepca.splits import load_resolved_splits
+from deepca.cohorts import CheckpointSplits, training_sources
 
 
 SPLIT_ALIASES = {
@@ -275,7 +276,14 @@ def _evaluation_contract(config: Mapping[str, Any]) -> dict[str, Any]:
     model = config.get("model")
     if not isinstance(data, Mapping) or not isinstance(model, Mapping):
         raise KeyError("Configuration requires 'data' and 'model' mappings.")
+    source_calibration = {}
+    if data.get("vessel_type") == "both":
+        source_calibration = {
+            vessel: {**data.get("calibration", {}), **source.get("calibration", {})}
+            for vessel, source in training_sources(data).items()
+        }
     return {
+        "source_calibration": source_calibration,
         "model": dict(model),
         "data": {
             key: data.get(key)
@@ -391,6 +399,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.view_counts if args.view_counts is not None else evaluation.get("view_counts", [2])
     )
     evaluation_mode = evaluation.get("mode", "standard")
+    if vessel == "both" and not _is_standard_evaluation_mode(evaluation_mode):
+        raise ValueError("Unified evaluation currently supports standard evaluation only.")
     if evaluation_mode == "inaccurate_view_direction":
         from deepca.view_direction_evaluation import run_sweep
         return run_sweep(config, args, main)
@@ -408,8 +418,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     save_resolved_config(config, output_dir / "resolved_config.yaml")
 
+    checkpoint_path = Path(
+        args.checkpoint or evaluation.get("checkpoint") or ""
+    ).expanduser().resolve()
+    unified_checkpoint = None
     try:
-        resolved_splits = load_resolved_splits(data_config["split_json"], vessel)
+        if vessel == "both":
+            unified_checkpoint = safe_torch_load(checkpoint_path, "cpu")
+            resolved_splits = CheckpointSplits(unified_checkpoint.get("resolved_splits"))
+        else:
+            resolved_splits = load_resolved_splits(data_config["split_json"], vessel)
         case_ids = resolved_splits.split_ids[split]
     except Exception as error:
         return _terminal_failure(
@@ -421,9 +439,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             config=config,
         )
 
-    checkpoint_path = Path(
-        args.checkpoint or evaluation.get("checkpoint") or ""
-    ).expanduser().resolve()
     try:
         if not checkpoint_path.is_file():
             raise FileNotFoundError(
@@ -434,7 +449,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             raise RuntimeError(
                 "CUDA evaluation requested but torch.cuda.is_available() is False."
             )
-        checkpoint = safe_torch_load(checkpoint_path, device)
+        checkpoint = (
+            unified_checkpoint if unified_checkpoint is not None
+            else safe_torch_load(checkpoint_path, device)
+        )
         checkpoint_config = checkpoint.get("config")
         if isinstance(checkpoint_config, Mapping):
             current_contract = _evaluation_contract(config)
@@ -499,31 +517,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
 
     failures: list[dict[str, Any]] = []
-    try:
-        projection_index = build_projection_index(
-            data_config["projection_root"], expected_vessel=vessel
-        )
-        pairs, pairing_failures = resolve_case_pairs(
-            case_ids,
-            projection_root=data_config["projection_root"],
-            ground_truth_root=data_config["ground_truth_root"],
-            vessel_type=vessel,
-            projection_index=projection_index,
-            strict=False,
-        )
-        failures.extend(pairing_failures)
-    except Exception as error:
-        failures.extend(
-            {
-                "case_id": case_id,
-                "vessel_type": vessel,
-                "stage": "projection_index",
-                "error_type": type(error).__name__,
-                "reason": str(error),
-            }
-            for case_id in case_ids
-        )
-        pairs = []
+    pairs = []
+    sources = training_sources(data_config)
+    for source_vessel, source in sources.items():
+        source_ids = [case_id for case_id in case_ids
+                      if case_id.startswith(source_vessel + "_")]
+        if not source_ids:
+            continue
+        try:
+            projection_index = build_projection_index(
+                source["projection_root"], expected_vessel=source_vessel
+            )
+            source_pairs, pairing_failures = resolve_case_pairs(
+                source_ids,
+                projection_root=source["projection_root"],
+                ground_truth_root=source["ground_truth_root"],
+                vessel_type=source_vessel,
+                projection_index=projection_index,
+                strict=False,
+            )
+            pairs.extend(source_pairs)
+            failures.extend(pairing_failures)
+        except Exception as error:
+            failures.extend(
+                {"case_id": case_id, "vessel_type": source_vessel,
+                 "stage": "projection_index", "error_type": type(error).__name__,
+                 "reason": str(error)}
+                for case_id in source_ids
+            )
 
     rows: list[dict[str, Any]] = []
     save_predictions = bool(evaluation.get("save_predictions", True)) and not args.no_save_predictions
@@ -648,6 +669,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     prediction_path = (
                         output_dir
                         / "predictions"
+                        / (pair.vessel_type if vessel == "both" else "")
                         / f"views_{num_views}"
                         / f"{pair.case_id}.npz"
                     )
@@ -732,6 +754,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         "threshold": threshold,
         "preprocessing": data_config["preprocessing"],
         "calibration_config": data_config["calibration"],
+        "source_calibration": _evaluation_contract(config)["source_calibration"],
+        "split_source": "checkpoint" if vessel == "both" else "split_json",
         "config_fingerprint": config_fingerprint(config),
         "skeletonization": skeletonization,
         "prediction_semantics": "raw generator output >= threshold",

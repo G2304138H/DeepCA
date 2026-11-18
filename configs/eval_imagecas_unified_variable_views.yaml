@@ -1,0 +1,9 @@
+extends: imagecas_unified_variable_views.yaml
+
+evaluation:
+  checkpoint: /export/home2/reny0012/result/deepca_imagecas/unified_variable_views/checkpoints/best.pt
+  split: test
+  threshold: 0.5
+  view_counts: [1, 2, 3, 4, 5, 6, 7]
+  save_predictions: true
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/unified_variable_views/evaluation

@@ -1,0 +1,9 @@
+extends: imagecas_unified.yaml
+
+evaluation:
+  checkpoint: /export/home2/reny0012/result/deepca_imagecas/unified/checkpoints/best.pt
+  split: test
+  threshold: 0.5
+  view_counts: [2]
+  save_predictions: true
+  output_dir: /export/home2/reny0012/result/deepca_imagecas/unified/evaluation

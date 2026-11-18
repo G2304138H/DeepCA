@@ -77,3 +77,37 @@ def resolve_training_pairs(data: Mapping[str, Any]):
                     "splits": {s: {"case_ids": [p.case_id for p in pairs]}
                                for s, pairs in pairs_by_split.items()}}
     return pairs_by_split, manifest
+
+
+class CheckpointSplits:
+    """Patient-safe final unified splits recorded by training, not original splits."""
+
+    def __init__(self, manifest: Mapping[str, Any]):
+        import copy
+
+        if not isinstance(manifest, Mapping) or manifest.get('expected_vessel') != 'both':
+            raise ValueError('Unified evaluation requires a unified checkpoint split manifest.')
+        self._manifest = copy.deepcopy(dict(manifest))
+        self.split_ids = {}
+        seen_cases = set()
+        patients = {}
+        for split in ('train', 'val', 'test'):
+            ids = manifest.get('splits', {}).get(split, {}).get('case_ids')
+            if not isinstance(ids, list):
+                raise ValueError(f'Checkpoint is missing the {split} case list.')
+            self.split_ids[split] = list(ids)
+            for case_id in ids:
+                vessel, number = parse_typed_case_id(case_id)
+                if case_id != f"{vessel}_{number:04d}":
+                    raise ValueError(f'Checkpoint case ID is not canonical: {case_id}.')
+                identity = (vessel, number)
+                if identity in seen_cases:
+                    raise ValueError(f'Duplicate checkpoint case: {case_id}.')
+                seen_cases.add(identity)
+                if patients.setdefault(number, split) != split:
+                    raise ValueError(f'Checkpoint has cross-artery patient split leakage: {number}.')
+
+    def as_manifest(self):
+        import copy
+
+        return copy.deepcopy(self._manifest)

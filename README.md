@@ -183,3 +183,11 @@ python train.py --config configs/imagecas_unified.yaml --device cuda:0
 
 See [unified training](docs/UNIFIED_TRAINING.md) for source paths, patient-safe
 split handling, variable-view training, resume commands, and validation outputs.
+
+Evaluate the shared checkpoint on its saved test split, with separate RCA/LCA NPZ folders:
+
+```bash
+python evaluate_unified.py --config configs/eval_imagecas_unified.yaml
+# For a model trained with variable views:
+python evaluate_unified.py --config configs/eval_imagecas_unified_variable_views.yaml
+```
